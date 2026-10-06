@@ -9,6 +9,10 @@
 system -> {}，none -> {"http": "", "https": ""}（空字符串 = 这个协议不走代理，也不看系统设置），
 custom -> {"http": 地址, "https": 地址}。改了方式或地址之后要调用 Config.apply_proxy()。
 长期使用的 requests.Session 不要直接赋值 session.proxies，用 configure_session()（原因见那里）。
+
+这里的代理只管“访问 Pixiv”。保存位置（SMB / FTP / SFTP / WebDAV / 对象存储）不受它影响：
+SMB、FTP、SFTP 本来就是直接连；WebDAV 和对象存储走 HTTP，用 for_storage() 决定——
+局域网里的地址一律直连，其余的按系统的代理设置（和别的程序一样）。
 """
 import time
 from urllib.parse import urlsplit
@@ -79,6 +83,29 @@ def configure_session(session, proxies=None):
     session.proxies = dict(proxies)
     session.trust_env = not (proxies and not any(proxies.values()))
     return session
+
+
+def is_local_host(host):
+    """是不是局域网 / 本机里的地址：内网 IP、回环地址、不带点的主机名、.local 之类"""
+    import ipaddress
+    host = str(host or "").strip().strip("[]").lower()
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        pass
+    return "." not in host or host.endswith((".local", ".lan", ".home", ".internal", ".localdomain"))
+
+
+def for_storage(url):
+    """连接保存位置（WebDAV / 对象存储）时用的 proxies。和访问 Pixiv 的代理设置无关。
+
+    局域网地址 -> {"http": "", "https": ""}（直连，连系统代理也不走）；其余 -> {}（按系统的代理设置）。
+    """
+    host = urlsplit(url if "://" in str(url or "") else f"//{url or ''}").hostname
+    return {"http": "", "https": ""} if is_local_host(host) else {}
 
 
 def describe(mode, url):

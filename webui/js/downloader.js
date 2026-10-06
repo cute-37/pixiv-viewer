@@ -461,7 +461,7 @@ export function initDownloader(ctx) {
   const PROXY_MODES = [["system", "跟随系统设置"], ["custom", "自定义"], ["none", "不使用代理"]];
   const PROXY_HINTS = {
     system: "使用 Windows 里设置的代理；系统没有设置代理时直接连接。",
-    custom: "只有这个软件访问 Pixiv 时走下面填的代理，不影响其他程序。",
+    custom: "只有这个软件访问 Pixiv 时走下面填的代理，不影响其他程序，也不影响连接保存位置。",
     none: "直接连接 Pixiv，即使系统设置了代理也不用。",
   };
   function proxyGroup(row) {

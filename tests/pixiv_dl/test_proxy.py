@@ -155,3 +155,47 @@ def test_legacy_proxies_setting_becomes_custom(cfg):
 def test_fresh_config_defaults_to_system(cfg):
     cfg.apply_proxy()
     assert cfg.PROXY_MODE == "system" and cfg.PROXIES == {}
+
+
+# ---------------------------------------------------------------- 保存位置不走 Pixiv 的代理
+@pytest.mark.parametrize("host, local", [
+    ("192.168.1.20", True), ("10.0.0.5", True), ("172.16.3.4", True), ("127.0.0.1", True), ("::1", True),
+    ("169.254.1.1", True), ("nas", True), ("nas.local", True), ("storage.lan", True),
+    ("8.8.8.8", False), ("dav.example.com", False), ("s3.amazonaws.com", False), ("", False),
+])
+def test_is_local_host(host, local):
+    assert proxy.is_local_host(host) is local
+
+
+def test_for_storage():
+    assert proxy.for_storage("http://192.168.1.20:5005/dav") == {"http": "", "https": ""}
+    assert proxy.for_storage("https://nas.local/remote.php/dav") == {"http": "", "https": ""}
+    assert proxy.for_storage("https://dav.example.com/files") == {}
+
+
+def test_webdav_on_lan_ignores_pixiv_proxy_and_system_proxy(net, cfg):
+    from pixiv_dl.storage.backends import WebDAVBackend
+    net.set_system(DEAD)                                         # 系统代理是坏的
+    cfg.PROXY_MODE, cfg.PROXY_URL = "custom", DEAD               # 给 Pixiv 设的代理也是坏的
+    cfg.apply_proxy()
+    backend = WebDAVBackend(net.site + "/dav")
+    assert backend.session.get(net.site + "/dav/x", timeout=5).status_code == 200
+    assert net.site_seen == ["/dav/x"] and net.proxy_seen == []
+
+
+def test_webdav_on_internet_follows_system_not_pixiv_proxy(net, cfg):
+    from pixiv_dl.storage.backends import WebDAVBackend
+    cfg.PROXY_MODE, cfg.PROXY_URL = "custom", DEAD
+    cfg.apply_proxy()
+    backend = WebDAVBackend("http://dav.example.com/files")
+    assert backend.session.proxies == {} and backend.session.trust_env     # 没带上 Pixiv 的代理，按系统设置
+
+
+def test_s3_client_proxy_choice(cfg):
+    from pixiv_dl.storage.backends import S3Backend
+    cfg.PROXY_MODE, cfg.PROXY_URL = "custom", DEAD
+    cfg.apply_proxy()
+    clients = [S3Backend._make_client(endpoint, "us-east-1", "k", "s", True, True)
+               for endpoint in ("http://192.168.1.30:9000", "https://s3.example.com", "")]
+    # 局域网直连（{}）；其余交给系统设置（None）；都不是给 Pixiv 设的代理
+    assert [c.meta.config.proxies for c in clients] == [{}, None, None]

@@ -383,8 +383,9 @@ class WebDAVBackend(Backend):
         self.session.verify = bool(verify)
         if user:
             self.session.auth = (user, password or '')
+        # 保存位置不走“访问 Pixiv”的代理：局域网地址直连，其余按系统设置
         from pixiv_dl import proxy
-        proxy.configure_session(self.session)
+        proxy.configure_session(self.session, proxy.for_storage(u))
         self.timeout = (10, 60)
 
     def describe(self):
@@ -920,6 +921,7 @@ class S3Backend(Backend):
 
     @staticmethod
     def _make_client(endpoint, region, access_key, secret_key, path_style, verify):
+        from pixiv_dl import proxy
         try:
             import boto3
             from botocore.config import Config as BotoConfig
@@ -928,7 +930,8 @@ class S3Backend(Backend):
         cfg = BotoConfig(signature_version='s3v4', retries={'max_attempts': 3, 'mode': 'standard'},
                          connect_timeout=10, read_timeout=60,
                          s3={'addressing_style': 'path' if path_style else 'auto'},
-                         proxies={k: v for k, v in (Config.PROXIES or {}).items() if v} or None)
+                         # 不走“访问 Pixiv”的代理：局域网里的服务直连（{}），其余按系统设置（None）
+                         proxies={} if endpoint and proxy.is_local_host(urlparse(endpoint if '://' in endpoint else '//' + endpoint).hostname) else None)
         return boto3.session.Session().client(
             's3', endpoint_url=endpoint or None, region_name=region, aws_access_key_id=access_key or None,
             aws_secret_access_key=secret_key or None, config=cfg, verify=bool(verify))
