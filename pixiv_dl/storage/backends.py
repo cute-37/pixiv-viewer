@@ -383,7 +383,8 @@ class WebDAVBackend(Backend):
         self.session.verify = bool(verify)
         if user:
             self.session.auth = (user, password or '')
-        self.session.proxies = Config.PROXIES or {}
+        from pixiv_dl import proxy
+        proxy.configure_session(self.session)
         self.timeout = (10, 60)
 
     def describe(self):
@@ -927,7 +928,7 @@ class S3Backend(Backend):
         cfg = BotoConfig(signature_version='s3v4', retries={'max_attempts': 3, 'mode': 'standard'},
                          connect_timeout=10, read_timeout=60,
                          s3={'addressing_style': 'path' if path_style else 'auto'},
-                         proxies=Config.PROXIES or None)
+                         proxies={k: v for k, v in (Config.PROXIES or {}).items() if v} or None)
         return boto3.session.Session().client(
             's3', endpoint_url=endpoint or None, region_name=region, aws_access_key_id=access_key or None,
             aws_secret_access_key=secret_key or None, config=cfg, verify=bool(verify))

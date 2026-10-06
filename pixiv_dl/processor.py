@@ -9,7 +9,7 @@ from datetime import datetime
 import requests
 from requests.adapters import HTTPAdapter
 
-from pixiv_dl import interrupt
+from pixiv_dl import interrupt, proxy
 from pixiv_dl.artists import ArtistMixin
 from pixiv_dl.config import Config
 from pixiv_dl.database import Database, ST_DONE
@@ -39,7 +39,7 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
         self._sem_lock = threading.Lock()
 
         self.session = requests.Session()
-        self.session.proxies = Config.PROXIES or {}
+        proxy.configure_session(self.session)
         self.session.headers.update({
             'Referer': 'https://www.pixiv.net/',
             'User-Agent': Config.USER_AGENT,

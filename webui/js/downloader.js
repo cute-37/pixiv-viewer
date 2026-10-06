@@ -117,7 +117,7 @@ export function initDownloader(ctx) {
 
   function mount(page) {
     state.page = page;
-    state.confirm = null; state.test = null; state.browse = null;
+    state.confirm = null; state.test = null; state.browse = null; state.ptest = null;
     if (!isOpen()) return;
     $$("[data-dlpage]", scrim).forEach((b) => b.classList.toggle("on", b.dataset.dlpage === page));
     if ($("#dl-title")) $("#dl-title").textContent = PAGES.find((x) => x[0] === page)[1];
@@ -456,7 +456,26 @@ export function initDownloader(ctx) {
       <div class="dl-actions">${b.share ? `<button class="btn primary" data-dl="browse-use">保存到这里</button>` : ""}<button class="btn ghost" data-dl="browse-close">关闭</button></div></div>`;
   }
   const OPTION_KEYS = ["MAIN_ACCOUNT_SYNC_THREADS", "BACKUP_ACCOUNT_SYNC_THREADS", "MAIN_ACCOUNT_DOWNLOAD_THREADS", "BACKUP_ACCOUNT_DOWNLOAD_THREADS", "DELAY_SYNC", "DELAY_DOWNLOAD",
-    "FAILURE_RATE_THRESHOLD", "RATE_LIMIT_ENABLED", "MAX_RETRIES", "SYNC_TYPES", "SYNC_NOVELS", "METADATA_REFRESH_LIMIT", "UGOIRA_PREFER_HQ", "UGOIRA_WEBP_LOSSLESS"];
+    "FAILURE_RATE_THRESHOLD", "RATE_LIMIT_ENABLED", "MAX_RETRIES", "SYNC_TYPES", "SYNC_NOVELS", "METADATA_REFRESH_LIMIT", "UGOIRA_PREFER_HQ", "UGOIRA_WEBP_LOSSLESS",
+    "PROXY_MODE", "PROXY_URL"];
+  const PROXY_MODES = [["system", "跟随系统设置"], ["custom", "自定义"], ["none", "不使用代理"]];
+  const PROXY_HINTS = {
+    system: "使用 Windows 里设置的代理；系统没有设置代理时直接连接。",
+    custom: "只有这个软件访问 Pixiv 时走下面填的代理，不影响其他程序。",
+    none: "直接连接 Pixiv，即使系统设置了代理也不用。",
+  };
+  function proxyGroup(row) {
+    const mode = val("PROXY_MODE") || "system", t = state.ptest;
+    return `<div class="group"><div class="gh">网络代理</div>
+        ${row("访问 Pixiv 时", PROXY_HINTS[mode], `<select data-dlproxysel aria-label="代理方式">${PROXY_MODES.map(([v, l]) => `<option value="${v}" ${mode === v ? "selected" : ""}>${l}</option>`).join("")}</select>`)}
+        ${mode === "custom" ? row("代理地址", "代理软件里显示的地址和端口。支持 http:// 和 socks5://；只写 127.0.0.1:7890 这样的会按 http 处理。",
+          `<input type="text" data-f="PROXY_URL" data-dlin="PROXY_URL" value="${esc(val("PROXY_URL") ?? "")}" placeholder="http://127.0.0.1:7890" autocomplete="off" spellcheck="false">`) : ""}
+        ${row("测试连接", "按上面选的方式试着连一下 Pixiv（不用先保存，不会登录或下载）。", `<button class="btn" data-dl="test-proxy" ${t && t.pending ? "disabled" : ""}>${t && t.pending ? "正在测试…" : "测试"}</button>`)}
+        ${t && !t.pending ? `<div class="dl-test ${t.ok ? "ok" : "bad"}"><div class="gh">${t.ok ? "可以连上 Pixiv" : "连不上 Pixiv"}${t.using ? `<small> · ${esc(t.using)}</small>` : ""}</div>
+          ${(t.steps || []).map((st) => `<div class="dl-step ${st.ok ? "ok" : "bad"}">${icon(st.ok ? "check" : "x")}<b>${esc(st.name)}</b><span>${esc(st.detail || "")}</span></div>`).join("")}
+          ${!(t.steps || []).length ? `<div class="dl-step bad">${icon("x")}<span>${esc(t.message || "测试没有完成")}</span></div>` : ""}</div>` : ""}
+      </div>`;
+  }
   function pageOptions() {
     const s = state.settings; if (!s) return "";
     const num = (key, min, max, step = 1) => `<input type="number" data-f="${key}" data-dlnum="${key}" min="${min}" max="${max}" step="${step}" value="${esc(String(val(key)))}">`;
@@ -466,6 +485,7 @@ export function initDownloader(ctx) {
     const types = val("SYNC_TYPES") || [];
     const preset = Object.entries(PRESETS).find(([, p]) => Object.entries(p[2]).every(([k, v]) => JSON.stringify(val(k)) === JSON.stringify(v)));
     return `${jobRunning() ? `<div class="dl-note lv-warn">${icon("warn")}<div><b>有任务正在运行</b><small>任务结束后才能修改这些选项。</small></div></div>` : ""}
+      ${proxyGroup(row)}
       <div class="group"><div class="gh">速度与风控</div>
         ${row("预设", "一次设置好下面的线程数和间隔。越快越容易被 Pixiv 限速。", `<div class="seg">${Object.entries(PRESETS).map(([k, p]) => `<button data-dlpreset="${k}" class="${preset && preset[0] === k ? "on" : ""}" title="${esc(p[1])}">${p[0]}</button>`).join("")}</div>`)}
         ${row("检查更新的线程数", "主账号 / 每个备用账号", `${num("MAIN_ACCOUNT_SYNC_THREADS", 1, 8)}<span>/</span>${num("BACKUP_ACCOUNT_SYNC_THREADS", 1, 8)}`)}
@@ -613,7 +633,14 @@ export function initDownloader(ctx) {
       return draw();
     }
     // ---- 设置
-    if (act === "revert") { state.form = {}; state.test = null; return draw(); }
+    if (act === "revert") { state.form = {}; state.test = null; state.ptest = null; return draw(); }
+    if (act === "test-proxy") {
+      state.ptest = { pending: true }; draw();
+      const body = { PROXY_MODE: val("PROXY_MODE") || "system", PROXY_URL: val("PROXY_URL") || "" };
+      try { state.ptest = await dl("POST", "/api/settings/test-proxy", body); }
+      catch (err) { state.ptest = { ok: false, message: err.message || "测试没有完成", steps: [] }; }
+      return draw();
+    }
     if (act === "pick-local") { const p = await api.pickDirectory(); if (p) { state.form.LOCAL_SAVE_PATH = p; draw(); } return; }
     if (act === "test") {
       state.test = { pending: true, steps: [] }; draw();
@@ -701,6 +728,7 @@ export function initDownloader(ctx) {
     draw();
   }
   scrim.addEventListener("change", (e) => {
+    if (isOpen() && e.target.matches("[data-dlproxysel]")) { state.form.PROXY_MODE = e.target.value; state.ptest = null; return draw(); }
     if (!isOpen() || !e.target.matches("[data-dlmodesel]")) return;
     state.form.STORAGE_MODE = e.target.value; state.test = null; state.browse = null;
     draw();

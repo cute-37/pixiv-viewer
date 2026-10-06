@@ -56,7 +56,7 @@ def main() -> int:
         "--distpath", str(DIST), "--workpath", str(WORK), "--specpath", str(WORK),
         "--add-data", f"{ROOT / 'webui'}{os.pathsep}webui",
         # 下载模块里按需导入的库
-        "--hidden-import", "paramiko", "--hidden-import", "boto3", "--hidden-import", "smb.SMBConnection",
+        "--hidden-import", "paramiko", "--hidden-import", "boto3", "--hidden-import", "smb.SMBConnection", "--hidden-import", "socks",
         "--collect-data", "botocore", "--collect-data", "boto3", "--collect-all", "cloudscraper",
         # 系统凭据库（保存网络共享的密码）
         "--collect-submodules", "keyring", "--hidden-import", "win32ctypes.core",

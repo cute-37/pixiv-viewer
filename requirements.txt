@@ -11,5 +11,6 @@ pixivpy3>=3.7
 requests
 tqdm
 pysmb
+PySocks      # SOCKS 代理
 # paramiko   # 仅 SFTP 保存方式需要
 # boto3      # 仅 对象存储 (S3) 保存方式需要

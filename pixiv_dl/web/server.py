@@ -91,7 +91,13 @@ def _types(v):
     return list(dict.fromkeys(v))
 
 
+def _proxy_url(v):
+    from pixiv_dl import proxy
+    return proxy.normalize(_str(v))
+
+
 SETTINGS_SPEC = {
+    'PROXY_MODE': _choice('system', 'none', 'custom'), 'PROXY_URL': _proxy_url,
     'STORAGE_MODE': _choice('local', 'smb', 'webdav', 'ftp', 'sftp', 's3'), 'LOCAL_SAVE_PATH': _str,
     'S3_ENDPOINT': _str, 'S3_REGION': _str, 'S3_BUCKET': _str, 'S3_PREFIX': _str, 'S3_ACCESS_KEY': _str,
     'S3_SECRET_KEY': _str, 'S3_PATH_STYLE': _bool, 'S3_VERIFY_TLS': _bool,
@@ -982,10 +988,19 @@ def api_settings_save(r):
             errors[k] = str(e)
     if errors:
         raise HttpError(400, "; ".join(f"{k}: {m}" for k, m in errors.items()))
+    if applied.get("PROXY_MODE", Config.PROXY_MODE) == "custom" and not applied.get("PROXY_URL", Config.PROXY_URL):
+        raise HttpError(400, "PROXY_URL: 选了自定义代理，但没有填地址")
     journal_warning = None
     old_journal = Config.DB_JOURNAL
     for k, v in applied.items():
         setattr(Config, k, v)
+    if "PROXY_MODE" in applied or "PROXY_URL" in applied:
+        from pixiv_dl import proxy
+        Config.apply_proxy()
+        # 已经建好的连接还带着旧的代理设置：图片下载的会话直接改，各账号的接口连接丢掉重建
+        proxy.configure_session(r.app.pro.session)
+        r.app.pro.clients.clear()
+        logger.info(f"代理设置已改为: {proxy.describe(Config.PROXY_MODE, Config.PROXY_URL)}")
     if applied.get("DB_JOURNAL") and applied["DB_JOURNAL"] != old_journal:
         from pixiv_dl import dbtools
         try:
@@ -998,6 +1013,26 @@ def api_settings_save(r):
     r.app.reset_storage()
     r.app.invalidate()
     return {"ok": True, "applied": [k for k in applied if k not in PASSWORD_KEYS], "warning": journal_warning}
+
+
+@route("POST", r"/api/settings/test-proxy")
+def api_test_proxy(r):
+    """按表单里（还没保存）的代理设置试着连一下 Pixiv。只读，不登录、不下载。"""
+    from pixiv_dl import proxy
+    mode = r.body.get("PROXY_MODE") or Config.PROXY_MODE or "system"
+    if mode not in proxy.MODES:
+        raise HttpError(400, "代理方式不对")
+    try:
+        url = proxy.normalize(r.body.get("PROXY_URL") if r.body.get("PROXY_URL") is not None else Config.PROXY_URL)
+    except ValueError as e:
+        raise HttpError(400, str(e))
+    if mode == "custom" and not url:
+        raise HttpError(400, "请先填写代理地址")
+    result = proxy.test(mode, url)
+    if mode == "system":
+        found = proxy.effective_system_proxy()
+        result["using"] = f"跟随系统设置（{'系统代理 ' + found if found else '系统没有设置代理，直接连接'}）"
+    return result
 
 
 def _nas_info(b):

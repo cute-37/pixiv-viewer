@@ -289,3 +289,40 @@ def test_update_download_can_be_cancelled(page):
     page.click("#upd-box [data-upd=start]")
     page.click("#upd-box [data-upd=cancel]")
     page.wait_for_selector("#upd-box [data-upd=start]")
+
+
+# ---------------- 下载代理（设置 → 下载选项） ----------------
+def open_download_options(page):
+    page.click("#btn-settings")
+    page.click(".dnav [data-page=dl-options]")
+    page.wait_for_selector("[data-dlproxysel]")
+
+
+def test_proxy_setting_custom_address_test_and_save(page):
+    open_download_options(page)
+    assert page.locator("[data-dlproxysel]").input_value() == "system"
+    assert page.locator("[data-dlin=PROXY_URL]").count() == 0          # 不是“自定义”时不显示地址框
+    page.select_option("[data-dlproxysel]", "custom")
+    page.fill("[data-dlin=PROXY_URL]", "127.0.0.1:7890")
+    page.click("[data-dl=test-proxy]")
+    page.wait_for_selector(".dl-test.ok")
+    assert "127.0.0.1:7890" in page.locator(".dl-test").inner_text()
+    assert page.locator("[data-dlin=PROXY_URL]").input_value() == "127.0.0.1:7890"   # 测试后填的内容还在
+    save = page.locator("[data-dl=save]")
+    assert save.is_enabled()
+    save.click()
+    page.wait_for_selector("[data-dlproxysel]")
+    page.wait_for_function("document.querySelector('[data-dlproxysel]').value === 'custom'")
+    assert page.locator("[data-dlin=PROXY_URL]").input_value() == "127.0.0.1:7890"
+
+
+def test_proxy_test_reports_failure_and_missing_address(page):
+    open_download_options(page)
+    page.select_option("[data-dlproxysel]", "none")
+    page.click("[data-dl=test-proxy]")
+    page.wait_for_selector(".dl-test.bad")
+    page.select_option("[data-dlproxysel]", "custom")
+    assert page.locator(".dl-test").count() == 0                        # 换了方式，旧的测试结果不再显示
+    page.click("[data-dl=test-proxy]")
+    page.wait_for_selector(".dl-test.bad")
+    assert "代理地址" in page.locator(".dl-test").inner_text()

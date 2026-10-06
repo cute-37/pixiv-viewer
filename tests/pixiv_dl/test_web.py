@@ -248,3 +248,55 @@ def test_test_storage_endpoint_local(srv, tmp_path):
     assert s == 200 and r['ok'] is True
     s, r, _ = srv.get('/api/storage/status')
     assert s == 200 and r['ok'] is True
+
+
+# ---------------------------------------------------------------- 代理设置
+def test_proxy_settings_roundtrip_and_apply(srv, cfg):
+    st, body, _ = srv.get('/api/settings')
+    assert body['settings']['PROXY_MODE'] == '' and 'PROXIES' not in body['settings']
+    srv.pro.clients['main'] = object()                          # 假装已经用旧设置建过连接
+    st, body, _ = srv.post('/api/settings', {'PROXY_MODE': 'custom', 'PROXY_URL': '127.0.0.1:7890'})
+    assert st == 200
+    assert cfg.PROXY_URL == 'http://127.0.0.1:7890'              # 没写协议的补上 http://
+    assert cfg.PROXIES == {'http': 'http://127.0.0.1:7890', 'https': 'http://127.0.0.1:7890'}
+    assert srv.pro.session.proxies == cfg.PROXIES and srv.pro.clients == {}
+    with open(cfg.SETTINGS_FILE, encoding='utf-8') as f:
+        saved = json.load(f)['current']
+    assert saved['PROXY_MODE'] == 'custom' and saved['PROXY_URL'] == 'http://127.0.0.1:7890'
+
+    srv.post('/api/settings', {'PROXY_MODE': 'none'})
+    assert cfg.PROXIES == {'http': '', 'https': ''} and srv.pro.session.proxies == cfg.PROXIES
+    srv.post('/api/settings', {'PROXY_MODE': 'system'})
+    assert cfg.PROXIES == {} and srv.pro.session.proxies == {}
+
+
+@pytest.mark.parametrize('body, expect', [
+    ({'PROXY_MODE': 'custom', 'PROXY_URL': ''}, '没有填地址'),
+    ({'PROXY_MODE': 'custom', 'PROXY_URL': 'ftp://127.0.0.1:21'}, 'http://'),
+    ({'PROXY_MODE': 'custom', 'PROXY_URL': 'http://127.0.0.1'}, '端口'),
+    ({'PROXY_MODE': 'whatever'}, '可选值'),
+])
+def test_proxy_settings_validation(srv, cfg, body, expect):
+    st, out, _ = srv.post('/api/settings', body)
+    assert st == 400 and expect in out['error']
+    assert cfg.PROXIES == {}                                     # 出错时什么都不改
+
+
+def test_proxy_test_endpoint_uses_form_values(srv, cfg, monkeypatch):
+    from pixiv_dl import proxy
+    seen = []
+
+    def fake_test(mode, url, timeout=8):
+        seen.append((mode, url))
+        return {'ok': True, 'message': 'ok', 'steps': [], 'using': proxy.describe(mode, url)}
+
+    monkeypatch.setattr(proxy, 'test', fake_test)
+    st, out, _ = srv.post('/api/settings/test-proxy', {'PROXY_MODE': 'custom', 'PROXY_URL': 'user:pw@10.0.0.2:8080'})
+    assert st == 200 and out['ok'] and seen == [('custom', 'http://user:pw@10.0.0.2:8080')]
+    assert out['using'] == 'http://10.0.0.2:8080'                # 显示时不带用户名密码
+    assert cfg.PROXY_MODE == ''                                  # 只是测试，不保存
+    st, out, _ = srv.post('/api/settings/test-proxy', {'PROXY_MODE': 'custom', 'PROXY_URL': ''})
+    assert st == 400 and '代理地址' in out['error']
+    st, out, _ = srv.post('/api/settings/test-proxy', {'PROXY_MODE': 'system'})
+    assert st == 200 and out['using'].startswith('跟随系统设置')
+

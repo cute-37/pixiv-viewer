@@ -31,6 +31,7 @@ def cfg(tmp_path, monkeypatch):
         'MAIN_ACCOUNT_DOWNLOAD_THREADS': 2, 'BACKUP_ACCOUNT_DOWNLOAD_THREADS': 1,
         'TOKENS': {'main': {'token': 'tok-main', 'is_valid': True}},
         'MAIN_ACCOUNT': 'main', 'REFRESH_TOKEN': '', 'PROXIES': {},
+        'PROXY_MODE': '', 'PROXY_URL': '',
     }.items():
         monkeypatch.setattr(Config, k, v)
     interrupt.clear()

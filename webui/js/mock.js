@@ -243,6 +243,7 @@ function mockDownloader() {
     STORAGE_MODE: "smb", LOCAL_SAVE_PATH: "D:\\Pixiv", NAS_IP: "192.168.1.100", NAS_USER: "pixiv", NAS_PASS_SET: true, NAS_SHARE: "media", NAS_BASE_PATH: "插画/PIXIV", NAS_REMOTE_NAME: "",
     WEBDAV_URL: "", WEBDAV_USER: "", WEBDAV_PASS_SET: false, WEBDAV_VERIFY_TLS: true, FTP_URL: "", FTP_USER: "", FTP_PASS_SET: false, SFTP_URL: "", SFTP_USER: "", SFTP_PASS_SET: false, SFTP_KEY_FILE: "",
     S3_ENDPOINT: "", S3_REGION: "", S3_BUCKET: "", S3_PREFIX: "", S3_ACCESS_KEY: "", S3_SECRET_KEY_SET: false, S3_PATH_STYLE: false, S3_VERIFY_TLS: true,
+    PROXY_MODE: "system", PROXY_URL: "",
     MAIN_ACCOUNT_SYNC_THREADS: 1, BACKUP_ACCOUNT_SYNC_THREADS: 1, MAIN_ACCOUNT_DOWNLOAD_THREADS: 1, BACKUP_ACCOUNT_DOWNLOAD_THREADS: 2, DELAY_SYNC: [1.5, 3], DELAY_DOWNLOAD: [0.8, 2],
     FAILURE_RATE_THRESHOLD: 0.5, RATE_LIMIT_ENABLED: true, MAX_RETRIES: 3, SYNC_TYPES: ["illust", "manga"], SYNC_NOVELS: true, METADATA_REFRESH_LIMIT: 20, UGOIRA_PREFER_HQ: true, UGOIRA_WEBP_LOSSLESS: true,
   };
@@ -363,6 +364,13 @@ function mockDownloader() {
         if (job.running) return err(409, "任务运行中，暂不能修改设置");
         for (const [k, v] of Object.entries(body)) { if (k.endsWith("_PASS") || k === "S3_SECRET_KEY") settings[k + "_SET"] = !!v; else settings[k] = v; }
         return ok({ ok: true, applied: Object.keys(body) });
+      }
+      if (path === "/api/settings/test-proxy") {
+        await wait(600);
+        if (body.PROXY_MODE === "custom" && !body.PROXY_URL) return err(400, "请先填写代理地址");
+        const good = body.PROXY_MODE !== "none";
+        return ok({ ok: good, message: good ? "可以连上 Pixiv" : "连不上 Pixiv", using: body.PROXY_MODE === "custom" ? body.PROXY_URL : body.PROXY_MODE === "none" ? "不使用代理" : "跟随系统设置（系统没有设置代理，直接连接）",
+          steps: [{ name: "Pixiv 接口", ok: good, detail: good ? "连得上，312 毫秒" : "8 秒内没有回应" }, { name: "图片服务器", ok: good, detail: good ? "连得上，208 毫秒" : "8 秒内没有回应" }] });
       }
       if (path === "/api/settings/test-storage") { await wait(700); return ok({ ok: true, message: "连接正常，可以保存", steps: [{ name: "连接服务器", ok: true, detail: "192.168.1.100 可以连上" }, { name: "登录", ok: true, detail: "用户名和密码正确" }, { name: "目录", ok: true, detail: "media/插画/PIXIV 存在" }, { name: "写入", ok: true, detail: "可以写入文件" }] }); }
       if (path === "/api/storage/browse") return ok(body.share ? { ok: true, kind: "folders", entries: body.path ? ["2024", "2025", "合集"] : ["插画", "漫画", "备份"] } : { ok: true, kind: "shares", entries: ["media", "backup", "home"] });

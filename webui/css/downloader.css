@@ -148,3 +148,7 @@
 .dl-picked .bad b:first-child { color: var(--text-2); font-weight: 400; }
 
 .dl-vis-hint { color: #b7791f !important; }
+/* 下载选项里的代理测试结果：嵌在分组里，不再套一层边框 */
+.group > .dl-test { margin: 0 calc(var(--gap) * 1.5) var(--gap); padding: calc(var(--gap) * .75) var(--gap); border-radius: var(--radius); background: var(--sunken); }
+.group > .dl-test .gh { padding: 0 0 4px; }
+.group > .dl-test .gh small { font-weight: 400; color: var(--text-3); }

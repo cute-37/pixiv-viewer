@@ -23,7 +23,7 @@ PERSIST_KEYS = [
     'MAIN_ACCOUNT_DOWNLOAD_THREADS', 'BACKUP_ACCOUNT_DOWNLOAD_THREADS',
     'METADATA_REFRESH_LIMIT', 'FAILURE_RATE_THRESHOLD', 'RATE_LIMIT_ENABLED',
     'SYNC_TYPES', 'SYNC_NOVELS', 'DELAY_SYNC', 'DELAY_DOWNLOAD', 'MAX_RETRIES',
-    'UGOIRA_PREFER_HQ', 'UGOIRA_WEBP_LOSSLESS', 'PROXIES', 'HOST_CONCURRENCY', 'AUTO_CLEAN_TEMP_AFTER_DOWNLOAD',
+    'UGOIRA_PREFER_HQ', 'UGOIRA_WEBP_LOSSLESS', 'PROXIES', 'PROXY_MODE', 'PROXY_URL', 'HOST_CONCURRENCY', 'AUTO_CLEAN_TEMP_AFTER_DOWNLOAD',
     'WEB_HOST', 'WEB_PORT', 'DB_AUTO_BACKUP_DAYS', 'DB_BACKUP_KEEP', 'DB_JOURNAL',
     'WEBDAV_URL', 'WEBDAV_USER', 'WEBDAV_PASS', 'WEBDAV_VERIFY_TLS',
     'FTP_URL', 'FTP_USER', 'FTP_PASS', 'SFTP_URL', 'SFTP_USER', 'SFTP_PASS', 'SFTP_KEY_FILE',
@@ -130,7 +130,11 @@ class Config:
     FILENAME_FORMAT = "{illust_id}_p{index}.{ext}"
 
     # --- 网络 ---
-    PROXIES = {}  # {"https": "http://127.0.0.1:7890"}
+    # 访问 Pixiv 用的代理，见 pixiv_dl/proxy.py。界面上改的是 PROXY_MODE / PROXY_URL；
+    # PROXIES 是由它们算出来、各处发请求时实际使用的字典（apply_proxy 负责更新）。
+    PROXY_MODE = ""   # system 跟随系统 / none 不使用 / custom 用 PROXY_URL；空 = 还没设置过（按 system 处理）
+    PROXY_URL = ""    # 例如 http://127.0.0.1:7890
+    PROXIES = {}
     USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36")
 
@@ -245,6 +249,20 @@ class Config:
             except Exception as e:
                 logger.warning(f"加载配置文件失败: {e}")
             cls._apply_env()
+            cls.apply_proxy()
+
+    @classmethod
+    def apply_proxy(cls):
+        """按 PROXY_MODE / PROXY_URL 算出 PROXIES。改了代理设置之后调用。
+
+        以前的版本没有这两项，只能手工在 settings.json 里写 PROXIES：那样的配置在这里转成“自定义”。
+        """
+        from pixiv_dl import proxy
+        if cls.PROXY_MODE not in proxy.MODES:
+            legacy = cls.PROXIES if isinstance(cls.PROXIES, dict) else {}
+            url = str(legacy.get('https') or legacy.get('http') or '')
+            cls.PROXY_MODE, cls.PROXY_URL = ('custom', url) if url else ('system', '')
+        cls.PROXIES = proxy.build(cls.PROXY_MODE, cls.PROXY_URL)
 
     @classmethod
     def _apply_env(cls):
@@ -382,6 +400,7 @@ class Config:
     def public_view(cls):
         """给 UI / 日志用的配置视图：不含任何密钥。"""
         view = {k: getattr(cls, k) for k in PERSIST_KEYS if hasattr(cls, k) and k not in SECRET_KEYS}
+        view.pop('PROXIES', None)             # 界面只用 PROXY_MODE / PROXY_URL
         for k in ('WEBDAV_URL', 'FTP_URL', 'SFTP_URL'):
             view[k] = _strip_userinfo(view.get(k))
         for k in PASSWORD_KEYS:

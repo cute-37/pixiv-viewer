@@ -52,7 +52,7 @@ def main() -> int:
         "--onedir", "--windowed", "--icon", str(ROOT / "webui" / "app.ico"),
         "--distpath", str(DIST), "--workpath", str(WORK), "--specpath", str(WORK),
         "--add-data", f"{ROOT / 'webui'}{os.pathsep}webui",
-        "--hidden-import", "paramiko", "--hidden-import", "boto3", "--hidden-import", "smb.SMBConnection",
+        "--hidden-import", "paramiko", "--hidden-import", "boto3", "--hidden-import", "smb.SMBConnection", "--hidden-import", "socks",
         "--collect-data", "botocore", "--collect-data", "boto3", "--collect-all", "cloudscraper",
     ]
     for mod in ("PyQt5", "tkinter", "numpy", "matplotlib", "pytest", "IPython"):

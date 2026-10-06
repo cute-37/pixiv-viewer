@@ -84,6 +84,7 @@ README 里的截图由 `python scripts/make_screenshots.py` 生成（示例数�
 - **前端模块**：跨模块的函数直接 `import`；`viewer.js`、`dialogs.js` 等通过 `ctx` 上挂的函数调用。
 - **字体**：默认的两款随程序发布；`settings.js` 里带 `web` 的几款只在选用时联网加载。更新字体文件用 `scripts/fetch_fonts.py`。
 - **下载功能**：任何更新 / 下载都必须由用户确认后才开始，不能自动运行；测试里不要启动真实的同步。
+- **代理**：访问 Pixiv 的请求都用 `Config.PROXIES`；长期使用的 `requests.Session` 要用 `pixiv_dl.proxy.configure_session()` 设置，不要直接赋值 `session.proxies`（那样“不使用代理”会被系统代理盖掉，原因见该函数的说明）。
 
 ## 数据目录
 
