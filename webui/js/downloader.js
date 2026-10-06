@@ -364,7 +364,7 @@ export function initDownloader(ctx) {
   }
   const OPTION_KEYS = ["MAIN_ACCOUNT_SYNC_THREADS", "BACKUP_ACCOUNT_SYNC_THREADS", "MAIN_ACCOUNT_DOWNLOAD_THREADS", "BACKUP_ACCOUNT_DOWNLOAD_THREADS", "DELAY_SYNC", "DELAY_DOWNLOAD",
     "FAILURE_RATE_THRESHOLD", "RATE_LIMIT_ENABLED", "MAX_RETRIES", "SYNC_TYPES", "SYNC_NOVELS", "METADATA_REFRESH_LIMIT", "UGOIRA_PREFER_HQ", "UGOIRA_WEBP_LOSSLESS",
-    "PROXY_MODE", "PROXY_URL", "REVIEW_THRESHOLD"];
+    "PROXY_MODE", "PROXY_URL", "REVIEW_THRESHOLD", "KEEP_AWAKE"];
   const PROXY_MODES = [["system", "跟随系统设置"], ["custom", "自定义"], ["none", "不使用代理"]];
   const PROXY_HINTS = {
     system: "使用 Windows 里设置的代理；系统没有设置代理时直接连接。",
@@ -407,6 +407,9 @@ export function initDownloader(ctx) {
         ${row("作品类型", "动图算在插画里", `<div class="seg multi">${[["illust", "插画"], ["manga", "漫画"]].map(([v, l]) => `<button data-dltype="${v}" class="${types.includes(v) ? "on" : ""}">${l}</button>`).join("")}</div>`)}
         ${row("小说", "", sw("SYNC_NOVELS"))}
         ${row("顺带刷新旧作品的数据", "增量检查时，遇到已有作品后再往前刷新多少个（收藏数、标签等）", `${num("METADATA_REFRESH_LIMIT", 0, 1000)}<span>个</span>`)}
+      </div>
+      <div class="group"><div class="gh">电脑睡眠</div>
+        ${row("任务进行时不让电脑自动睡眠", "锁屏、关屏幕都不影响下载；会让下载停下来的是电脑空闲一段时间后自动睡眠。打开后，有任务在运行时电脑不会自己睡，任务结束或暂停后恢复正常。挡不住合上笔记本盖子和手动睡眠。", sw("KEEP_AWAKE"))}
       </div>
       <div class="group"><div class="gh">检查之后</div>
         ${row("新发现的文件超过多少先问我", "“检查更新并下载”时，如果这次新发现的文件比这个数多，就先停下来列出是谁的，等你确认后再下载。填 0 表示从不询问。", `${num("REVIEW_THRESHOLD", 0, 1000000)}<span>个</span>`)}

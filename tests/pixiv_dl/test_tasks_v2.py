@@ -487,3 +487,164 @@ def test_pause_takes_effect_between_pages_of_one_work(cfg, no_sleep):
     pro.download()
     assert len(times) == 4 and times[2] - times[1] >= 0.5                # 第 2 页之后停住了，继续后才下第 3 页
     assert sum(1 for v in statuses(Database.local(cfg.DB_PATH)).values() if v == 1) == 4
+
+
+# ================================================================ 网络断了：等它回来
+def outage(monkeypatch, down_probes, on_recover=None):
+    """让网络“断”上几次探测，然后恢复；恢复的那一刻调用 on_recover"""
+    from pixiv_dl import netwatch
+    state = {'calls': 0}
+
+    def probe():
+        state['calls'] += 1
+        if state['calls'] == down_probes + 1 and on_recover:
+            on_recover()
+        return state['calls'] > down_probes
+
+    monkeypatch.setattr(netwatch, 'probe', probe)
+    monkeypatch.setattr(netwatch, 'CACHE_SECS', 0)
+    monkeypatch.setattr(netwatch, 'RETRY_SECS', 0.01)
+    netwatch.reset()
+    return state
+
+
+def test_download_waits_for_network_instead_of_failing(cfg, no_sleep, monkeypatch):
+    import requests
+    api = api_with({10: ('Alice', [])})
+    api.illusts[(10, 'illust')] = [make_illust(500, pages=3)]
+    routes = routes_for(api)
+    good = routes['https://new.example/img/500_p1.png']
+    routes['https://new.example/img/500_p1.png'] = requests.ConnectionError('网络断了')      # 第 2 页下到一半断网
+    routes['https://new.example/img/500_p2.png'] = requests.ConnectionError('网络断了')
+    pro, _ = make_processor(api, routes)
+    pro.sync()
+
+    def recover():
+        routes['https://new.example/img/500_p1.png'] = good
+        routes['https://new.example/img/500_p2.png'] = good
+
+    state = outage(monkeypatch, down_probes=3, on_recover=recover)
+    pro.download()
+    db = Database.local(cfg.DB_PATH)
+    rows = db.conn.execute("SELECT status, COALESCE(attempts,0) FROM illusts ORDER BY page_index").fetchall()
+    assert rows == [(1, 0), (1, 0), (1, 0)]                               # 全部下完，没有占用重试次数
+    assert pro.job.failed == 0 and pro.job.success == 3 and pro.job.done == 3      # 已经下好的第 1 页没有被重复计数
+    assert pro.session.requested.count('https://new.example/img/500_p0.png') == 1
+    logs = ' '.join(line['msg'] for line in pro.job.snapshot()['logs'])
+    assert '网络连不上' in logs and '网络恢复了' in logs
+    assert pro.job.result['network']['outages'] == 1 and state['calls'] >= 4
+
+
+def test_network_errors_count_as_failures_when_the_network_is_actually_up(cfg, no_sleep):
+    import requests
+    api = api_with({10: ('Alice', [105])})
+    routes = routes_for(api)
+    routes['https://new.example/img/105_p0.png'] = requests.ConnectionError('只有这一个地址连不上')
+    pro, _ = make_processor(api, routes)
+    pro.sync()
+    pro.download()                                                        # 探测是通的：照常记一次失败
+    db = Database.local(cfg.DB_PATH)
+    assert db.conn.execute("SELECT status, attempts, error_kind FROM illusts").fetchone() == (-1, 1, 'network')
+
+
+def test_gives_up_waiting_after_the_limit_and_fails_normally(cfg, no_sleep, monkeypatch):
+    import requests
+    from pixiv_dl import netwatch
+    api = api_with({10: ('Alice', [105])})
+    routes = routes_for(api)
+    routes['https://new.example/img/105_p0.png'] = requests.ConnectionError('一直连不上')
+    pro, _ = make_processor(api, routes)
+    pro.sync()
+    outage(monkeypatch, down_probes=10 ** 6)
+    monkeypatch.setattr(netwatch, 'MAX_WAIT', 0)
+    pro.download()
+    db = Database.local(cfg.DB_PATH)
+    assert db.conn.execute("SELECT status, error_kind FROM illusts").fetchone() == (-1, 'network')
+    assert any('不再等了' in line['msg'] for line in pro.job.snapshot()['logs'])
+
+
+def test_api_calls_wait_for_network_without_using_attempts(cfg, no_sleep, monkeypatch):
+    class Offline(FakeAPI):
+        fails = 10 ** 6                                                   # 网络没恢复之前一直失败
+
+        def user_illusts(self, user_id, type='illust', offset=None, **kw):
+            if Offline.fails > 0:
+                Offline.fails -= 1
+                raise ConnectionError('没有网络')
+            return super().user_illusts(user_id, type=type, offset=offset, **kw)
+
+    api = Offline()
+    api.following['public'] = [(10, 'Alice')]
+    api.users[10] = {'name': 'Alice'}
+    api.illusts[(10, 'illust')] = [make_illust(105)]
+    pro, _ = make_processor(api)
+    outage(monkeypatch, down_probes=6, on_recover=lambda: setattr(Offline, 'fails', 0))
+    pro.sync()
+    assert pro.job.failed == 0 and pro.job.success == 1                   # 网络回来后查成功了，没有算失败
+    assert Database.local(cfg.DB_PATH).sync_failures() == []
+
+
+# ================================================================ 任务进行时不让电脑睡眠
+def test_keep_awake_follows_the_wanted_state(monkeypatch):
+    from pixiv_dl import keepawake
+    calls, want = [], {'on': False}
+    monkeypatch.setattr(keepawake, '_set_state', lambda awake: calls.append(awake) or True)
+    keeper = keepawake.KeepAwake(lambda: want['on'])
+    keeper.start()
+    time.sleep(1.3)
+    assert calls == []                                                    # 没有任务：什么都不请求
+    want['on'] = True
+    time.sleep(1.3)
+    assert calls == [True] and keeper.active
+    time.sleep(1.2)
+    assert calls == [True]                                                # 状态没变就不重复请求
+    want['on'] = False
+    time.sleep(1.3)
+    assert calls == [True, False] and not keeper.active
+    want['on'] = True
+    time.sleep(1.3)
+    keeper.stop()
+    time.sleep(1.3)
+    assert calls == [True, False, True, False]                            # 停掉时一定会撤回
+
+
+def test_job_requests_awake_only_while_running_and_not_paused(stocked, cfg, monkeypatch):
+    from pixiv_dl import keepawake
+    pro, api, db = stocked
+    calls = []
+    monkeypatch.setattr(keepawake, '_set_state', lambda awake: calls.append(awake) or True)
+    real = pro._process_group
+    marks = {}
+
+    def slow(client, wdb, iid, mt, ts, throttle):
+        if 'first' not in marks:
+            marks['first'] = True
+            time.sleep(1.4)                                               # 任务在跑：这期间应该已经请求了“别睡”
+            marks['while_running'] = list(calls)
+            interrupt.pause()
+            threading.Timer(1.6, lambda: (marks.__setitem__('while_paused', list(calls)), interrupt.resume())).start()
+        return real(client, wdb, iid, mt, ts, throttle)
+
+    pro._process_group = slow
+    pro.download()
+    time.sleep(1.4)
+    assert marks['while_running'] == [True]
+    assert marks['while_paused'] == [True, False]                         # 暂停时撤回
+    assert calls[-1] is False                                             # 结束后一定是撤回的状态
+
+
+def test_keep_awake_can_be_turned_off(stocked, cfg, monkeypatch):
+    from pixiv_dl import keepawake
+    pro, api, db = stocked
+    calls = []
+    monkeypatch.setattr(keepawake, '_set_state', lambda awake: calls.append(awake) or True)
+    monkeypatch.setattr(cfg, 'KEEP_AWAKE', False)
+    real = pro._process_group
+
+    def slow(client, wdb, iid, mt, ts, throttle):
+        time.sleep(0.4)
+        return real(client, wdb, iid, mt, ts, throttle)
+
+    pro._process_group = slow
+    pro.download()
+    assert calls == []

@@ -4,7 +4,7 @@ import threading
 import time
 
 from pixiv_dl.config import Config
-from pixiv_dl import interrupt, ratelimit
+from pixiv_dl import interrupt, netwatch, ratelimit
 
 logger = logging.getLogger("PixivDownloader")
 
@@ -119,6 +119,11 @@ class PixivClient:
                 res = func(*args, **kwargs)
             except Exception as e:
                 last = ApiError(OTHER, str(e))
+                # 请求根本没发出去：先看是不是网络断了。断了就等它回来再试，不算一次失败的尝试
+                if not netwatch.watch.is_up():
+                    if netwatch.watch.wait_until_up() == "interrupted":
+                        return None, ApiError(INTERRUPTED, "interrupted")
+                    continue
                 attempt += 1
                 if interrupt.wait(min(5 * attempt, 30)):
                     return None, ApiError(INTERRUPTED, "interrupted")

@@ -38,6 +38,10 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
         self.host_semaphores = {}
         self._sem_lock = threading.Lock()
 
+        from pixiv_dl.keepawake import KeepAwake
+        self._keep_awake = KeepAwake(lambda: bool(getattr(Config, 'KEEP_AWAKE', True)) and self.job.running
+                                     and not interrupt.is_paused())
+
         self.session = requests.Session()
         proxy.configure_session(self.session)
         self.session.headers.update({
@@ -136,6 +140,7 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
 
     def _on_job_start(self, job):
         """同步/下载开始前，如果距离上次备份已超过设定天数，先自动备份一次数据库。"""
+        self._keep_awake.start()          # 任务进行时不让电脑自动睡眠（设置里可以关）
         if job.kind not in self._AUTO_BACKUP_KINDS:
             return
         from pixiv_dl import dbtools

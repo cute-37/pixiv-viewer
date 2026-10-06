@@ -177,8 +177,9 @@ def job_op(kind):
             if outer:
                 interrupt.clear()
                 self.job = JobState(kind, _plain_params(kwargs))
-                from pixiv_dl import ratelimit
+                from pixiv_dl import netwatch, ratelimit
                 ratelimit.reset(self.job)
+                netwatch.reset(self.job)
             if outer:
                 hook = getattr(self, '_on_job_start', None)
                 if hook is not None:

@@ -34,7 +34,10 @@ def cfg(tmp_path, monkeypatch):
         'PROXY_MODE': '', 'PROXY_URL': '',
     }.items():
         monkeypatch.setattr(Config, k, v)
-    from pixiv_dl import ratelimit
+    from pixiv_dl import keepawake, netwatch, ratelimit
+    monkeypatch.setattr(netwatch, 'probe', lambda: True)          # 测试里网络一直是“通的”，除非某个测试自己改
+    monkeypatch.setattr(keepawake, '_set_state', lambda awake: True)   # 不真的去动这台电脑的睡眠设置
+    netwatch.reset()
     monkeypatch.setattr(ratelimit, 'STEPS', (0.01, 0.01, 0.01))
     monkeypatch.setattr(ratelimit, 'BUDGET', 0.05)
     ratelimit.reset()

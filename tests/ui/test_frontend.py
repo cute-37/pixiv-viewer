@@ -625,3 +625,13 @@ def test_side_button_can_be_rebound(page):
     idx = page.locator("#v-idx").inner_text()
     side_button(page, 4)
     page.wait_for_function("t => document.querySelector('#v-idx').innerText !== t", arg=idx)
+
+
+def test_keep_awake_switch_in_download_options(page):
+    open_download_options(page)
+    switch = page.locator("[data-dlsw=KEEP_AWAKE]")
+    assert switch.get_attribute("aria-checked") == "true"                # 默认打开
+    assert "睡眠" in page.locator("#dl-page").inner_text()
+    switch.click()
+    assert page.locator("[data-dlsw=KEEP_AWAKE]").get_attribute("aria-checked") == "false"
+    assert page.locator("[data-dl=save]").is_enabled()

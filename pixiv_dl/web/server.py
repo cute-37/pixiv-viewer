@@ -110,7 +110,7 @@ SETTINGS_SPEC = {
     'MAIN_ACCOUNT_SYNC_THREADS': _int_range(1, 8), 'BACKUP_ACCOUNT_SYNC_THREADS': _int_range(1, 8),
     'MAIN_ACCOUNT_DOWNLOAD_THREADS': _int_range(1, 8), 'BACKUP_ACCOUNT_DOWNLOAD_THREADS': _int_range(1, 8),
     'METADATA_REFRESH_LIMIT': _int_range(0, 1000), 'FAILURE_RATE_THRESHOLD': _float_range(0.1, 0.9),
-    'REVIEW_THRESHOLD': _int_range(0, 1000000),
+    'REVIEW_THRESHOLD': _int_range(0, 1000000), 'KEEP_AWAKE': _bool,
     'RATE_LIMIT_ENABLED': _bool, 'SYNC_NOVELS': _bool, 'UGOIRA_PREFER_HQ': _bool, 'UGOIRA_WEBP_LOSSLESS': _bool,
     'SYNC_TYPES': _types, 'DELAY_SYNC': _pair, 'DELAY_DOWNLOAD': _pair, 'MAX_RETRIES': _int_range(1, 10),
     'DB_AUTO_BACKUP_DAYS': _int_range(0, 365), 'DB_BACKUP_KEEP': _int_range(1, 50), 'DB_JOURNAL': _choice('delete', 'wal'),

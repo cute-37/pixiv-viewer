@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from pixiv_dl import interrupt, ratelimit, visibility
+from pixiv_dl import interrupt, netwatch, ratelimit, visibility
 from pixiv_dl.config import Config
 from pixiv_dl.database import Database, ST_DONE, ST_FAILED
 from pixiv_dl.extract import _g, extract_pages, is_visible, ugoira_info, ugoira_zip_candidates, url_ext
@@ -263,7 +263,14 @@ class DownloadMixin:
             logger.exception(f"处理作品 {iid} 出错")
             results = {k: ('fail', f"{type(e).__name__}: {e}", False, kind_of(e)) for k in keys}
 
+        # 网络类的失败：先看是不是网络断了。断了的话这些文件不记失败，放回队列，等网络回来再下
+        down = [k for k in keys if results.get(k, ('',))[0] == 'fail' and len(results[k]) > 3
+                and results[k][3] == 'network' and not results[k][2]]
+        if down and netwatch.watch.is_up():
+            down = []
         for k in keys:
+            if k in down:
+                continue
             kind, *rest = results.get(k, ('fail', '未处理', False, 'other'))
             if kind == 'ok':
                 job.add(done=1, success=1, bytes=rest[0])
@@ -281,6 +288,8 @@ class DownloadMixin:
                     throttle.hold(60, "图片服务器限速")
                 elif not rest[1]:  # 作品已删除/地址失效是确定性结果，不代表被限速，不计入失败率
                     throttle.record(False)
+        if down:
+            raise _NetworkDown([t for t in tasks if t[0] in down])
         return used_api
 
     # -- 图片
@@ -605,6 +614,11 @@ class DownloadMixin:
                         tried[me] = e.restricted
                         blind[(me, aid)] = blind.get((me, aid), 0) + 1
                     q.put((iid, mt, ts, tried))               # 换别的账号；都试过之后由 give_up 收尾
+                except _NetworkDown as e:
+                    q.put((iid, mt, e.tasks, tried))          # 只把没下成的那几页放回去；已经下好的不重来
+                    job.worker_set(me, state='resting', text='网络连不上，等待恢复')
+                    if netwatch.watch.wait_until_up() == "interrupted":
+                        return
                 except _RateLimited:
                     used_api = True
                     q.put((iid, mt, ts, tried))               # 不算失败：等限速过去，或者留给别的账号 / 下次
@@ -658,7 +672,8 @@ class DownloadMixin:
 
         left = q.qsize()
         summary = {'tasks': len(tasks), 'success': job.success, 'failed': job.failed,
-                   'skipped': job.skipped, 'bytes': job.bytes, 'unprocessed_groups': left}
+                   'skipped': job.skipped, 'bytes': job.bytes, 'unprocessed_groups': left,
+                   'network': netwatch.watch.summary()}
         job.set(result={**job.result, **summary})
         logger.info(f"下载阶段结束: 成功 {job.success}（其中已存在跳过 {job.skipped}），失败 {job.failed}，"
                     f"数据量 {self._format_size(job.bytes)}")
@@ -674,6 +689,14 @@ class _NotVisible(Exception):
         super().__init__(message)
         self.message = message
         self.restricted = restricted
+
+
+class _NetworkDown(Exception):
+    """网络断了。tasks 是这个作品里还没下成的那几页，放回队列等网络恢复。"""
+
+    def __init__(self, tasks):
+        super().__init__("network down")
+        self.tasks = tasks
 
 
 class _RateLimited(Exception):
