@@ -157,7 +157,7 @@ class Config:
     # --- 风控休息策略 (已下载数量为 threshold 倍数时暂停 N 秒，优先较大阈值) ---
     # 周期性休息：每个账号各算各的，下完 REST_EVERY 个文件休息 REST_SECONDS 秒（见 downloader.Throttle）
     RATE_LIMIT_ENABLED = True
-    REST_EVERY = 500
+    REST_EVERY = 150           # 预设：保守 80 / 平衡 150 / 激进 300，都是休息 10 秒
     REST_SECONDS = 10
     RATE_LIMIT_RULES = {}      # 旧版本的写法（所有账号合在一起数），不再使用；留着是为了读旧的设置文件不出错
 
