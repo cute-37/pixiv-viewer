@@ -285,3 +285,28 @@ def test_api_reports_errors_instead_of_raising(install, monkeypatch):
     assert api.update_status()["state"] == "idle"
     api._update_done = {"from": "2.4.0"}
     assert api.update_done() == {"from": "2.4.0"} and api.update_done() is None
+
+
+def test_update_apply_really_quits_even_when_close_would_ask(install, monkeypatch):
+    """关闭窗口平时会询问“托盘还是退出”；更新时必须真的退出，否则新版本等不到旧版本结束"""
+    from webapp.tray import CloseMixin
+
+    class Window:
+        destroyed = 0
+
+        def destroy(self):
+            Window.destroyed += 1
+
+    class Api(UpdateApiMixin, CloseMixin):
+        pass
+
+    api = Api()
+    api._window = Window()
+    api._updater = make_updater(install, monkeypatch)
+    monkeypatch.setattr(api._updater, "launch_apply", lambda: True)
+    timers = []
+    monkeypatch.setattr(updater.threading, "Timer", lambda delay, fn: timers.append(fn) or type("T", (), {"start": lambda self: None})())
+    assert api.update_apply() == {"ok": True}
+    timers[0]()
+    assert api._quitting is True and Window.destroyed == 1
+

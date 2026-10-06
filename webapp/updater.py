@@ -296,8 +296,10 @@ class UpdateApiMixin:
         """启动新程序去替换，然后关掉自己的窗口（程序随之退出，下载任务会处理完当前文件再停）"""
         def run():
             self._updater.launch_apply()
-            if self._window is not None:
-                threading.Timer(0.8, self._window.destroy).start()
+            # 要真的退出：关闭窗口平时会先询问“放到托盘还是退出”（见 webapp/tray.py），更新时不能被它拦住
+            closer = getattr(self, "_quit", None) or (self._window.destroy if self._window is not None else None)
+            if closer is not None:
+                threading.Timer(0.8, closer).start()
             return {}
         return self._update_call(run)
 
