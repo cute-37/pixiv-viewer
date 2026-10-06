@@ -11,7 +11,7 @@ import os
 # ==================== 应用信息 ====================
 APP_NAME = "Pixiv 图片查看器"
 # 整个软件唯一的版本号：安装包文件名、“关于”页、下载模块都读这里。发版时改这一处，并在 CHANGELOG.md 里记一笔。
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.1.1"
 # 新版本发布在这个 GitHub 仓库的 Releases 里；“检查更新”从这里取（见 webapp/updater.py、scripts/release.py）
 UPDATE_REPO = "cute-37/pixiv-viewer"
 APP_AUTHOR = "Pixiv Viewer Team"
