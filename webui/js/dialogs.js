@@ -1,5 +1,5 @@
 // 对话框：设置（所有外观参数都是可选项，改动立即生效）、批量添加标签
-import { $, $$, esc, icon, toast, fmtNum } from "./util.js";
+import { $, $$, esc, icon, toast, fmtNum, fmtSize } from "./util.js";
 import { mountUpdate } from "./update.js";
 import { FAMILIES, ACCENTS, FONTS, HEAD_FONTS, DEFAULTS, setDensity, markCustomDensity, palette } from "./settings.js";
 
@@ -144,6 +144,11 @@ export function initDialogs(ctx) {
       group("内容", [
         row("显示 R18 内容", "关闭后，R18 作品不会出现在任何地方（网格、预览、搜索建议、看图页的其他作品），工具栏上的分级切换也会隐藏。", sw("showR18")),
       ]),
+      group("缓存", [
+        row(`缩略图缓存 · ${fmtSize(lib.cache?.size || 0)}`,
+          `为了翻页快，看过的图片会存一份小图在本机。${lib.cache?.maxBytes ? `超过 ${fmtSize(lib.cache.maxBytes)} 或 ${lib.cache.maxAgeDays} 天没用到的部分，会在下次启动时自动清掉。` : ""}清空不会影响任何图片，之后浏览时会重新生成。`,
+          ctx.api.clearCache ? `<button class="btn" data-act="clear-cache" ${lib.cache?.size ? "" : "disabled"}>清空</button>` : ""),
+      ]),
       group("启动", [row("打开上次浏览的位置", "", sw("rememberLast"))]),
     ].join("");
   }
@@ -191,6 +196,13 @@ export function initDialogs(ctx) {
     }
     const act = t.closest("[data-act]");
     if (act?.dataset.act === "add-root") { await ctx.addFolder(); return renderPage(true); }
+    if (act?.dataset.act === "clear-cache") {
+      act.disabled = true;
+      const r = await ctx.api.clearCache();
+      await ctx.reloadLibrary();
+      toast(`已清空缩略图缓存，释放 ${fmtSize((r && r.freed) || 0)}`);
+      return renderPage(true);
+    }
     if (act?.dataset.act === "reset-look") {
       const keep = { lastScope: ctx.S.lastScope, sort: ctx.S.sort, rating: ctx.S.rating };
       Object.assign(ctx.S, DEFAULTS, keep);

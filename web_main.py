@@ -82,6 +82,9 @@ def main() -> int:
 
     def on_started():
         api._start_indexing(on_progress=refresh_ui, on_done=lambda: refresh_ui(True))
+        # 缩略图缓存不会无限增长：每次启动在后台清一遍太旧的和超量的
+        import threading
+        threading.Thread(target=api._prune_cache, name="cache-prune", daemon=True).start()
 
     # 调试用：设置环境变量 PV_DEBUG_PORT=端口号 后，可以用浏览器开发者工具连接到界面
     if os.environ.get("PV_DEBUG_PORT", "").isdigit():

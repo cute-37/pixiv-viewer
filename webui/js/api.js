@@ -87,6 +87,7 @@ function desktopApi() {
     // 缩略图走单独的端口，不和数据接口、大图抢浏览器的并发连接
     thumbSrc: (src) => (src.includes("/thumb?") ? src : `${window.__PV_THUMB__ || ""}/thumb?t=${token}&path=${encodeURIComponent(src)}`),
     windowAction: call("window_action"),
+    clearCache: call("clear_cache"),
     // 在软件里弹出窗口登录 Pixiv（见 webapp/login_window.py）
     loginStart: call("login_start"), loginStatus: call("login_status"), loginCancel: call("login_cancel"),
     // 软件自身的更新（见 update.js）

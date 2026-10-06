@@ -45,6 +45,11 @@ def cache_path(image_path: str, mtime: float, size: int, render_size: int,
     return Path(cache_dir or CACHE_DIR) / name
 
 
+def clear(cache_dir: Optional[Path] = None) -> Dict[str, int]:
+    """删掉全部缩略图缓存，返回 {"removed": 文件数, "freed": 字节数}。之后浏览时会按需重新生成。"""
+    return {k: v for k, v in prune(max_bytes=0, max_age_days=10 ** 6, cache_dir=cache_dir).items() if k != "kept_bytes"}
+
+
 def touch(path: Path) -> None:
     """刷新最近使用时间（失败忽略）"""
     try:

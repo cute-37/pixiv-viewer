@@ -43,3 +43,12 @@ def test_touch_refreshes_recency(tmp_path):
     before = p.stat().st_mtime
     tc.touch(p)
     assert p.stat().st_mtime > before
+
+
+def test_clear_removes_everything(tmp_path):
+    _make(tmp_path / "a.jpg", 100, 0)
+    _make(tmp_path / "b.jpg", 300, 30)
+    assert tc.clear(cache_dir=tmp_path) == {"removed": 2, "freed": 400}
+    assert list(tmp_path.iterdir()) == []
+    assert tc.clear(cache_dir=tmp_path) == {"removed": 0, "freed": 0}
+    assert tc.clear(cache_dir=tmp_path / "missing") == {"removed": 0, "freed": 0}

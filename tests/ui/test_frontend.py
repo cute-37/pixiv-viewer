@@ -359,3 +359,14 @@ def test_manual_login_instructions_mention_preserve_log(page):
     text = page.locator(".dl-steps").inner_text()
     assert "先不要登录" in text and "保留日志" in text and "callback?" in text
     assert "地址栏" not in text                                           # 地址栏里不会出现要找的那个地址
+
+
+# ---------------- 缩略图缓存 ----------------
+def test_clear_thumbnail_cache_from_settings(page):
+    page.click("#btn-settings")
+    page.click(".dnav [data-page=library]")
+    row = page.locator(".set", has=page.locator("[data-act=clear-cache]"))
+    assert "缩略图缓存" in row.inner_text() and "214" in row.inner_text() and "90 天" in row.inner_text()
+    page.click("[data-act=clear-cache]")
+    page.wait_for_function("document.querySelector('[data-act=clear-cache]') && document.querySelector('[data-act=clear-cache]').disabled")
+    assert "已清空缩略图缓存" in page.locator("#toast-t").inner_text()

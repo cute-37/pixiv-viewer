@@ -118,6 +118,7 @@ const FOLDERS = [{ id: 1, name: "风景", artists: ARTISTS.slice(0, 3).map((a) =
 
 let updState = { state: "idle", done: 0, total: 0, error: "" };
 let mockLogin = null;
+let mockCacheSize = 214 * 1048576;
 
 export const mock = {
   isMock: true,
@@ -134,7 +135,7 @@ export const mock = {
       artists: ARTISTS.map((a) => ({ ...a, count: counts.get(a.key) || 0, updated: updated.get(a.key) || 0 })),
       totals: { images: WORKS.reduce((n, w) => n + w.pages.length, 0), works: WORKS.length, fav: WORKS.filter((w) => w.fav).length, recent: WORKS.filter((w) => w.viewed).length },
       metadata: { path: "D:\\Pixiv\\db\\pixiv.db", ok: true },
-      cache: { size: 214 * 1048576 },
+      cache: { size: mockCacheSize, maxBytes: 500 * 1048576, maxAgeDays: 90 },
       folders: FOLDERS.map((f) => ({ ...f, artists: [...f.artists] })),
       demo: true,
       version: "预览",
@@ -221,6 +222,7 @@ export const mock = {
   async removeFolder() { return true; },
   async reveal() { return "preview"; },
   async openExternal() { return "preview"; },
+  async clearCache() { const freed = mockCacheSize; mockCacheSize = 0; return { removed: 4321, freed }; },
   // 登录窗口：预览版里假装过几秒登录成功
   async loginStart() { mockLogin = { status: "waiting", at: Date.now() }; return { ok: true, status: "waiting" }; },
   async loginStatus() {

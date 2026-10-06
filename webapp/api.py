@@ -171,7 +171,7 @@ class Api(UpdateApiMixin, LoginMixin):
             "metadata": {"path": str(self._reader.db_path or ""), "ok": bool(self._reader.db_path)},
             "dataHome": str(self._downloader_home()),
             "folders": self._store.folders(),
-            "cache": {"size": self._cache_size()},
+            "cache": self.cache_info(),
             "indexing": self._indexing,
         }
 
@@ -683,6 +683,30 @@ class Api(UpdateApiMixin, LoginMixin):
         return {"scanned": len(targets)}
 
     # ================= 窗口（无边框窗口的标题栏按钮） =================
+    # ---- 缩略图缓存
+    def _prune_cache(self) -> None:
+        """启动时在后台调用：删掉太久没用到的缩略图，并把总大小压回上限以内（规则见 utils/thumbnail_cache.py）"""
+        from utils import thumbnail_cache
+        try:
+            result = thumbnail_cache.prune()
+            if result["removed"]:
+                logger.info(f"清理缩略图缓存：删除 {result['removed']} 个，释放 {result['freed'] / 1048576:.0f} MB")
+            self._cache_stat = None
+        except Exception as e:
+            logger.warning(f"清理缩略图缓存失败: {e}")
+
+    def cache_info(self):
+        from utils import thumbnail_cache
+        return {"size": self._cache_size(), "maxBytes": thumbnail_cache.DEFAULT_MAX_BYTES,
+                "maxAgeDays": thumbnail_cache.DEFAULT_MAX_AGE_DAYS}
+
+    def clear_cache(self):
+        """清空缩略图缓存（只是缓存，不动任何图片）。返回 {removed, freed}"""
+        from utils import thumbnail_cache
+        result = thumbnail_cache.clear()
+        self._cache_stat = None
+        return result
+
     def window_action(self, action):
         """minimize / toggle（最大化与还原）/ close / drag / state；返回窗口当前是否最大化"""
         from . import chrome

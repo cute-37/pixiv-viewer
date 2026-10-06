@@ -243,3 +243,31 @@ def test_suggestions_can_leave_out_r18(setup):
     assert [w["pid"] for w in api.suggest("星空")["works"]] == [100002]     # 100002 是 R18
     assert api.suggest("星空", True)["works"] == [] and api.suggest("星空", True)["tags"] == []
     assert [w["pid"] for w in api.suggest("夏", True)["works"]] == [100001]
+
+
+def test_thumbnail_cache_is_pruned_and_can_be_cleared(setup, monkeypatch):
+    import os
+    import time
+    from utils import thumbnail_cache
+    from webapp import api as api_module
+    api, *_ = setup
+    cache = api_module.CACHE_DIR
+    cache.mkdir(parents=True, exist_ok=True)
+    for old in cache.glob("*.jpg"):
+        old.unlink()
+    for name, size, age_days in (("fresh.jpg", 600, 1), ("stale.jpg", 600, 200), ("mid.jpg", 600, 10)):
+        (cache / name).write_bytes(b"x" * size)
+        t = time.time() - age_days * 86400
+        os.utime(cache / name, (t, t))
+    info = api.cache_info()
+    assert info["size"] == 1800 and info["maxAgeDays"] == 90 and info["maxBytes"] == 500 * 1024 * 1024
+    assert api.get_library()["cache"]["size"] == 1800
+
+    monkeypatch.setattr(thumbnail_cache, "DEFAULT_MAX_BYTES", 1000)       # 启动时的清理：太旧的删掉，再压到上限以内
+    monkeypatch.setattr(thumbnail_cache.prune, "__defaults__", (1000, 90, None))
+    api._prune_cache()
+    assert sorted(p.name for p in cache.glob("*.jpg")) == ["fresh.jpg"]   # 200 天没用的删掉；超量时先删最久没用的
+    assert api.cache_info()["size"] == 600
+
+    assert api.clear_cache() == {"removed": 1, "freed": 600}
+    assert api.cache_info()["size"] == 0
