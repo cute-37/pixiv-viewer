@@ -118,6 +118,7 @@ const FOLDERS = [{ id: 1, name: "风景", artists: ARTISTS.slice(0, 3).map((a) =
 
 let updState = { state: "idle", done: 0, total: 0, error: "" };
 let mockLogin = null;
+let mockAfter = null;
 let mockCacheSize = 214 * 1048576;
 
 export const mock = {
@@ -226,6 +227,18 @@ export const mock = {
   ...(new URLSearchParams(location.search).has("desktop") ? { async windowAction(action) { if (action === "tray" || action === "close") window.__pvLastWindowAction = action; return false; } } : {}),
   async saveText(name) { return "D:\\导出\\" + name; },
   async clearCache() { const freed = mockCacheSize; mockCacheSize = 0; return { removed: 4321, freed }; },
+  // 任务结束后的动作：预览版里只演示倒计时，不会真的关机
+  async jobWatch(o) { mockAfter = { action: (o && o.action) || "none", state: "watching", until: 0 }; return { ok: true, ...mockAfter }; },
+  async afterJobSet(action) { if (mockAfter) mockAfter.action = action; return { ok: true }; },
+  async afterJobCancel() { if (mockAfter) { mockAfter.state = "idle"; mockAfter.action = "none"; } return { ok: true }; },
+  async afterJobState() {
+    const a = mockAfter || { action: "none", state: "idle" };
+    const job = await this.dl("GET", "/api/job");
+    if (a.state === "watching" && !job.data.running) { if (a.action === "none" || job.data.status !== "done") a.state = "idle"; else { a.state = "countdown"; a.until = Date.now() + 5000; } }
+    if (a.state === "countdown" && Date.now() >= a.until) { a.state = "idle"; a.message = "预览版不会真的执行"; }
+    const labels = { sleep: "让电脑睡眠", hibernate: "让电脑休眠", shutdown: "关机", exit: "退出软件", command: "运行命令" };
+    return { ok: true, action: a.action, state: a.state, seconds: Math.max(0, Math.ceil((a.until - Date.now()) / 1000)), message: a.message || "", label: labels[a.action] || "" };
+  },
   // 登录窗口：预览版里假装过几秒登录成功
   async loginStart() { mockLogin = { status: "waiting", at: Date.now() }; return { ok: true, status: "waiting" }; },
   async loginStatus() {

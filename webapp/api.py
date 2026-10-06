@@ -29,6 +29,7 @@ from utils.logger import get_logger
 from . import importer
 from .downloader import DownloaderBridge, DownloaderData, DownloaderError, resolve_home
 from .library import DEFAULT_AR, Artist, LibraryIndex, Work
+from .afterjob import AfterJobMixin
 from .login_window import LoginMixin
 from .store import WebStore
 from .tray import CloseMixin
@@ -74,7 +75,7 @@ def _month(ts: float) -> str:
     return f"{d.year}-{d.month:02d}"
 
 
-class Api(UpdateApiMixin, LoginMixin, CloseMixin):
+class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
     def __init__(self, config_manager, reader, database, store: Optional[WebStore] = None, token: str = "") -> None:
         self._cm = config_manager
         self._reader = reader

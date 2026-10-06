@@ -15,6 +15,7 @@ const SCOPES = [
   ["all", "关注的全部画师"], ["folder", "某个文件夹里的画师"], ["pinned", "置顶的画师"], ["failed", "上次检查失败的"],
   ["never", "从来没查成功过的"], ["stale", "超过几天没查的"],
 ];
+const AFTER = [["none", "什么都不做"], ["sleep", "让电脑睡眠"], ["hibernate", "让电脑休眠"], ["shutdown", "关机"], ["exit", "退出软件"], ["command", "运行命令"]];
 const isSync = (kind) => kind === "sync" || kind === "sync_download";
 const isDownload = (kind) => kind === "download" || kind === "sync_download";
 
@@ -30,6 +31,11 @@ export function createTasks(D) {
     openGroups: new Set(),   // 展开的“检查失败”分组
   });
   const running = () => { const j = state.job; return !!(j && (j.running || j.status === "running")); };
+  // “完成后做什么”的下拉框：每次任务单独选；没填命令时“运行命令”选不了
+  const afterSelect = () => (!api.jobWatch ? "" : `<select data-after aria-label="完成后">${AFTER.map(([v, l]) => {
+    const noCmd = v === "command" && !((ctx.S && ctx.S.afterCommand) || "").trim();
+    return `<option value="${v}" ${(state.after || "none") === v ? "selected" : ""} ${noCmd ? "disabled" : ""}>${l}${noCmd ? "（先在“下载选项”里填命令）" : ""}</option>`;
+  }).join("")}</select>`);
   const viewerArtist = (authorId) => (ctx.lib && ctx.lib.artists || []).find((a) => String(a.id) === String(authorId));
   const pixivWork = (id) => `https://www.pixiv.net/artworks/${id}`;
   const pixivUser = (id) => `https://www.pixiv.net/users/${id}`;
@@ -168,6 +174,7 @@ export function createTasks(D) {
       <p>${esc(text)}</p>
       <p class="dl-hint">期间会按“下载选项”里的间隔访问 Pixiv，可以随时暂停或停止。${plan.accounts_valid ? `将使用 ${plan.accounts_valid} 个账号。` : ""}</p>
       ${hasOpts && !c.simple ? `<button class="linkbtn dl-more" data-dl="opts">${state.optsOpen ? "收起选项" : "更多选项：查谁、下什么、用哪些账号…"}</button>${state.optsOpen ? optionsHTML(c, plan) : ""}` : ""}
+      ${api.jobWatch ? `<div class="dl-after"><span>完成后</span>${afterSelect()}<small>${(state.after || "none") === "none" ? "只对这一次任务有效。" : "任务正常做完才会执行，执行前有倒计时可以取消；手动停止或出错时不执行。"}</small></div>` : ""}
       <div class="dl-actions"><button class="btn primary" data-dl="start">开始</button><button class="btn ghost" data-dl="cancel-ask">取消</button></div>
     </div>`;
   }
@@ -193,6 +200,7 @@ export function createTasks(D) {
         <span class="sp"></span><span>已用 ${fmtDur(job.elapsed || 0)}${eta ? ` · 约剩 ${eta}` : ""}</span>
       </div>
       ${job.message ? `<p class="dl-hint">${esc(job.message)}</p>` : ""}
+      ${api.jobWatch ? `<div class="dl-after"><span>完成后</span>${afterSelect()}</div>` : ""}
       ${workers.length ? `<div class="dl-workers">${workers.map((w) => `<div><span class="nm">${esc(w.name)}</span><span class="tx">${esc(w.note || w.text || ({ queue: "等待", waiting: "间隔中", done: "已完成", resting: "休息中", paused: "已暂停" }[w.state] || ""))}</span></div>`).join("")}</div>` : ""}
       ${state.logsOpen ? logBox() : logs.length ? `<div class="dl-logs">${logs.map((l) => `<div>${esc(l.msg)}</div>`).join("")}</div>` : ""}
       <button class="linkbtn" data-dl="logs">${state.logsOpen ? "收起日志" : "查看详细日志"}</button>
@@ -477,6 +485,11 @@ export function createTasks(D) {
   /** 选项面板和清单里的输入。处理了返回 true。 */
   function change(e) {
     const t = e.target;
+    if (t.dataset.after !== undefined && "after" in t.dataset) {
+      state.after = t.value;
+      if (running() && api.afterJobSet) api.afterJobSet(state.after, (ctx.S && ctx.S.afterCommand) || "");
+      draw(); return true;
+    }
     if (t.dataset.opt && state.opts) {
       state.opts[t.dataset.opt] = t.value;
       if (t.dataset.opt === "scope") { if (t.value === "folder" && !state.opts.folder && folders().length) state.opts.folder = folders()[0].id; state.opts.resume = ""; draw(); }

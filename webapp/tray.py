@@ -74,8 +74,39 @@ class Tray:
         menu.Items.Add(quit_item)
         icon.ContextMenuStrip = menu
         icon.MouseClick += click_handler
-        self._keep += [open_handler, quit_handler, click_handler, menu, show_item, quit_item]
+        balloon_handler = EventHandler(lambda s, a: self._restore_now())      # 点通知：把窗口叫出来
+        icon.BalloonTipClicked += balloon_handler
+        self._keep += [open_handler, quit_handler, click_handler, balloon_handler, menu, show_item, quit_item]
         self._icon = icon
+
+    def notify(self, title: str, text: str = "") -> bool:
+        """弹一条系统通知（用托盘图标发）。窗口没有放在托盘里时，图标只在通知期间短暂出现。"""
+        if sys.platform != "win32":
+            return False
+
+        def run():
+            self._ensure_icon()
+            from System.Windows.Forms import ToolTipIcon
+            self._icon.Visible = True
+            self._icon.ShowBalloonTip(8000, str(title)[:60] or self.title, str(text or " ")[:240], ToolTipIcon.Info)
+
+        def tidy():
+            def hide():
+                if self._icon is not None and not self.hidden:
+                    self._icon.Visible = False
+            try:
+                self._ui(hide)
+            except Exception:
+                pass
+
+        try:
+            self._ui(run)
+            if not self.hidden:
+                threading.Timer(12, tidy).start()
+            return True
+        except Exception as e:
+            logger.debug(f"系统通知没有发出去: {e}")
+            return False
 
     def hide(self) -> bool:
         """把窗口放到托盘。成功返回 True。"""

@@ -635,3 +635,39 @@ def test_keep_awake_switch_in_download_options(page):
     switch.click()
     assert page.locator("[data-dlsw=KEEP_AWAKE]").get_attribute("aria-checked") == "false"
     assert page.locator("[data-dl=save]").is_enabled()
+
+
+# ---------------- 下载完成后做什么 ----------------
+def test_after_job_action_countdown_and_cancel(page):
+    open_dl(page)
+    page.click("[data-dl=ask][data-kind=download]")
+    select = page.locator(".dl-confirm [data-after]")
+    assert select.input_value() == "none"
+    assert page.locator(".dl-confirm [data-after] option[value=command]").is_disabled()     # 没填命令：选不了
+    select.select_option("shutdown")
+    assert "倒计时" in page.locator(".dl-after").inner_text()
+    page.click("[data-dl=start]")
+    page.wait_for_selector(".dl-run-card [data-after]")
+    assert page.locator(".dl-run-card [data-after]").input_value() == "shutdown"            # 进行中还能看到、还能改
+    page.wait_for_selector(".afterask", timeout=40000)
+    assert "秒后关机" in page.locator(".afterask h3").inner_text()
+    page.click("[data-after-cancel]")
+    page.wait_for_selector(".afterask", state="detached")
+    assert "已取消" in page.locator("#toast-t").inner_text()
+    page.click("[data-dl=dismiss]")
+    page.click("[data-dl=ask][data-kind=sync]")
+    assert page.locator(".dl-confirm [data-after]").input_value() == "none"                 # 不会记成默认：下一次又是“什么都不做”
+
+
+def test_after_job_settings_in_download_options(page):
+    open_download_options(page)
+    switch = page.locator("[data-uisw=notifyOnFinish]")
+    assert switch.get_attribute("aria-checked") == "true"
+    switch.click()
+    assert page.locator("[data-uisw=notifyOnFinish]").get_attribute("aria-checked") == "false"
+    page.fill("[data-uiin=afterCommand]", "D:\\scripts\\after.bat")
+    page.locator("[data-uiin=afterCommand]").blur()
+    page.keyboard.press("Escape")
+    open_dl(page)
+    page.click("[data-dl=ask][data-kind=sync]")
+    assert not page.locator(".dl-confirm [data-after] option[value=command]").is_disabled()  # 填了命令之后可以选

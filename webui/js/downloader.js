@@ -73,6 +73,7 @@ export function initDownloader(ctx) {
     refreshed: null,         // 已经为哪个任务刷新过图库
     speed: { t: 0, bytes: 0, done: 0, bps: 0, ips: 0 },
     settings: null, form: {}, test: null, accounts: null, failures: null, info: null, busy: "", link: null,
+    after: "none",           // 这次任务完成后做什么（每次任务单独选，不记成默认）
     oauth: null, login: null, loginError: "", browse: null, logsOpen: false, logLines: [], logSince: 0,
     imp: { items: [], results: null, busy: false },      // 导入：已选并识别出来的文件、导入结果
   };
@@ -225,7 +226,30 @@ export function initDownloader(ctx) {
       : `<div>还没有日志</div>`}</div>`;
   };
   // 任务结束：有新文件就重新扫描对应的画师文件夹，并提示结果
+  // 任务完成、“完成后做什么”进入倒计时的时候：显示出来，可以取消
+  let afterTimer = 0;
+  function watchAfter() {
+    clearInterval(afterTimer);
+    if (!api.afterJobState) return;
+    const box = () => document.querySelector(".afterask");
+    const stop = () => { clearInterval(afterTimer); afterTimer = 0; const b = box(); if (b) b.remove(); };
+    afterTimer = setInterval(async () => {
+      let st; try { st = await api.afterJobState(); } catch (e) { return stop(); }
+      if (st.state === "watching") return;
+      if (st.state !== "countdown") { stop(); if (st.message && st.action !== "none") toast(st.message); return; }
+      let b = box();
+      if (!b) {
+        b = document.createElement("div"); b.className = "closeask afterask";
+        b.innerHTML = `<div class="closeask-card"><h3></h3><p>任务已经完成。不想执行的话点“取消”。</p><div class="closeask-actions"><span class="sp"></span><button class="btn primary" data-after-cancel>取消</button></div></div>`;
+        b.querySelector("[data-after-cancel]").addEventListener("click", async () => { await api.afterJobCancel(); stop(); toast("已取消"); });
+        document.body.append(b);
+      }
+      b.querySelector("h3").textContent = `${st.seconds} 秒后${st.label}`;
+    }, 500);
+  }
   async function finished(job) {
+    if (state.after && state.after !== "none") watchAfter();
+    state.after = "none";
     const got = Object.keys((job.detail && job.detail.downloaded) || {});
     const text = job.status === "done" ? `${KIND_LABEL[job.kind] || "任务"}完成${job.success ? `：新下载 ${fmtNum(job.success)} 个文件` : "，没有新文件"}`
       : job.status === "cancelled" ? "任务已停止" : `任务出错：${job.error || ""}`;
@@ -250,6 +274,8 @@ export function initDownloader(ctx) {
     state.confirm = null;
     const ok = await guard(() => dl("POST", "/api/job", { kind, ...(params || {}) }));
     if (!ok) return draw();
+    // 让后端盯着这个任务：结束时发系统通知，并执行选好的“完成后做什么”
+    if (api.jobWatch) api.jobWatch({ action: state.after || "none", command: (ctx.S && ctx.S.afterCommand) || "", notify: !ctx.S || ctx.S.notifyOnFinish !== false });
     state.dismissed = null;
     state.logLines = [];
     onJob(await dl("GET", "/api/job"));
@@ -409,6 +435,12 @@ export function initDownloader(ctx) {
         ${row("小说", "", sw("SYNC_NOVELS"))}
         ${row("顺带刷新旧作品的数据", "增量检查时，遇到已有作品后再往前刷新多少个（收藏数、标签等）", `${num("METADATA_REFRESH_LIMIT", 0, 1000)}<span>个</span>`)}
       </div>
+      ${ctx.setSetting && api.jobWatch ? `<div class="group"><div class="gh">任务结束后</div>
+        <div class="set"><div class="t">弹出系统通知<small>检查或下载结束时在屏幕右下角提醒，窗口放在托盘里也能看到。</small></div>
+          <div class="ctl"><button class="switch ${ctx.S.notifyOnFinish !== false ? "on" : ""}" data-uisw="notifyOnFinish" role="switch" aria-checked="${ctx.S.notifyOnFinish !== false}"></button></div></div>
+        <div class="set"><div class="t">“完成后运行命令”要运行的命令<small>开始任务时可以选“完成后运行命令”。这里填要运行的程序或脚本，例如 <span class="mono">D:\\scripts\\after.bat</span>。留空则不能选这一项。</small></div>
+          <div class="ctl"><input type="text" data-f="afterCommand" data-uiin="afterCommand" value="${esc(ctx.S.afterCommand || "")}" placeholder="程序或脚本的完整路径" autocomplete="off" spellcheck="false"></div></div>
+      </div>` : ""}
       <div class="group"><div class="gh">电脑睡眠</div>
         ${row("任务进行时不让电脑自动睡眠", "锁屏、关屏幕都不影响下载；会让下载停下来的是电脑空闲一段时间后自动睡眠。打开后，有任务在运行时电脑不会自己睡，任务结束或暂停后恢复正常。挡不住合上笔记本盖子和手动睡眠。", sw("KEEP_AWAKE"))}
       </div>
@@ -491,6 +523,8 @@ export function initDownloader(ctx) {
     const br = t.closest("[data-dlbrowse]");
     if (br) { const [share, path] = br.dataset.dlbrowse.split("|"); return browse(share || "", path ? path.split("/").filter(Boolean) : []); }
     if (tasks.toggle(t)) return;
+    const us = t.closest("[data-uisw]");
+    if (us) { ctx.setSetting({ [us.dataset.uisw]: !(ctx.S[us.dataset.uisw] !== false) }); return draw(); }
     const cp = t.closest("[data-dlclose-pref]");
     if (cp) { ctx.setSetting({ closeAction: cp.dataset.dlclosePref }); return draw(); }
     const b = t.closest("[data-dl]"); if (!b || b.disabled) return;
@@ -642,6 +676,7 @@ export function initDownloader(ctx) {
     draw();
   }
   scrim.addEventListener("change", (e) => {
+    if (isOpen() && e.target.dataset.uiin) { ctx.setSetting({ [e.target.dataset.uiin]: e.target.value.trim() }); return; }
     if (isOpen() && tasks.change(e)) return;
     if (isOpen() && e.target.matches("[data-dlproxysel]")) { state.form.PROXY_MODE = e.target.value; state.ptest = null; return draw(); }
     if (!isOpen() || !e.target.matches("[data-dlmodesel]")) return;

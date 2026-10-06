@@ -196,3 +196,7 @@
 .dl-pager { display: flex; align-items: center; justify-content: center; gap: var(--gap); padding: 0 0 var(--gap); color: var(--text-3); }
 .dl-review > p { margin: 0; padding: 0 calc(var(--gap) * 1.5) var(--gap); line-height: 1.55; color: var(--text-2); }
 .dl-review .dl-actions { padding-left: calc(var(--gap) * 1.5); padding-right: calc(var(--gap) * 1.5); padding-bottom: var(--gap); }
+/* 完成后做什么 */
+.dl-after { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; padding: 2px calc(var(--gap) * 1.5) var(--gap); color: var(--text-2); }
+.dl-after select { height: calc(var(--ctl) - 2px); border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); color: var(--text); padding: 0 8px; }
+.dl-after small { color: var(--text-3); }

@@ -31,6 +31,7 @@ os.environ.setdefault("PIXIV_VIEWER_DATA_DIR", str(HOME))     # 不让公共模�
 
 from webapp.login_window import LoginMixin  # noqa: E402  （只用标准库，不受上面环境变量影响）
 from webapp.tray import CloseMixin, SingleInstance  # noqa: E402
+from webapp.afterjob import AfterJobMixin  # noqa: E402
 
 PENDING = HOME / "import-pending.json"                        # 上次没能立即导入、留到这次启动时做的文件
 
@@ -66,7 +67,7 @@ class StaticHandler(BaseHTTPRequestHandler):
             pass
 
 
-class DlApi(LoginMixin, CloseMixin):
+class DlApi(LoginMixin, CloseMixin, AfterJobMixin):
     """给界面用的接口。pywebview 会把不以下划线开头的方法暴露给网页。"""
 
     def __init__(self) -> None:

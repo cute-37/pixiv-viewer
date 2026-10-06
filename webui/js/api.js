@@ -88,6 +88,8 @@ function desktopApi() {
     thumbSrc: (src) => (src.includes("/thumb?") ? src : `${window.__PV_THUMB__ || ""}/thumb?t=${token}&path=${encodeURIComponent(src)}`),
     windowAction: call("window_action"),
     clearCache: call("clear_cache"), saveText: call("save_text"),
+    // 任务结束后：系统通知、完成后睡眠 / 关机 / 退出 / 运行命令（见 webapp/afterjob.py）
+    jobWatch: call("job_watch"), afterJobSet: call("after_job_set"), afterJobState: call("after_job_state"), afterJobCancel: call("after_job_cancel"),
     // 在软件里弹出窗口登录 Pixiv（见 webapp/login_window.py）
     loginStart: call("login_start"), loginStatus: call("login_status"), loginCancel: call("login_cancel"),
     // 软件自身的更新（见 update.js）
