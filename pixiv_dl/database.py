@@ -15,13 +15,14 @@ ST_DONE = 1
 ST_RUNNING = 2
 ST_FAILED = -1
 ST_IGNORED = -2   # 用户选择忽略的失败任务（不再自动重试，也不计入失败）
+ST_SKIPPED = -3   # 用户决定不下载的待下载任务（可以恢复成待下载）
 
 # artists 表允许通过 upsert_artist 写入的字段
 ARTIST_FIELDS = (
     'profile_image_url', 'profile_image_local', 'author_account', 'author_comment',
     'total_illusts', 'total_bookmarks', 'is_followed', 'is_private_follow', 'is_deleted',
     'is_temp_name', 'twitter_account', 'webpage', 'gender', 'birth', 'region', 'job',
-    'pawoo_url', 'background_image_url',
+    'pawoo_url', 'background_image_url', 'sync_skip',
 )
 
 # 新版本需要、旧库可能缺少的列：只做 ADD COLUMN，绝不修改/删除已有数据
@@ -33,6 +34,11 @@ ARTIST_COLUMNS = [
     ('is_temp_name', 'INTEGER DEFAULT 0'), ('profile_image_local', 'TEXT'),
     ('gender', 'TEXT'), ('birth', 'TEXT'), ('region', 'TEXT'), ('job', 'TEXT'),
     ('pawoo_url', 'TEXT'), ('background_image_url', 'TEXT'),
+    # 上一次检查的结果：ok / failed；失败原因的类别、说明、时间、连续失败次数；sync_skip = 不再检查这位画师
+    ('sync_status', 'TEXT'), ('sync_error_kind', 'TEXT'), ('sync_error', 'TEXT'), ('sync_error_time', 'TEXT'),
+    ('sync_fail_count', 'INTEGER DEFAULT 0'), ('sync_skip', 'INTEGER DEFAULT 0'),
+    # 每种作品类型各自检查到哪了（旧版本只有 last_synced_id，插画和漫画共用；这两列是空的时候沿用它）
+    ('wm_illust', 'INTEGER'), ('wm_manga', 'INTEGER'),
 ]
 METADATA_COLUMNS = [
     ('total_view', 'INTEGER DEFAULT 0'), ('total_bookmarks', 'INTEGER DEFAULT 0'),
@@ -45,10 +51,12 @@ METADATA_FIELDS = (
     'series_title', 'tools', 'caption', 'total_view', 'total_bookmarks', 'is_bookmarked',
     'ai_type', 'ugoira_data', 'tags_translated',
 )
-ILLUST_COLUMNS = [('last_error', 'TEXT'), ('error_kind', 'TEXT')]
+ILLUST_COLUMNS = [('last_error', 'TEXT'), ('error_kind', 'TEXT'),
+                  # 什么时候被发现的；origin：new = 比上次检查更新的作品，old = 回看时补进来的旧作品
+                  ('created_at', 'TEXT'), ('origin', 'TEXT')]
 
 # 失败原因分类（error_kind）
-ERROR_KINDS = ('deleted', 'restricted', 'network', 'http', 'storage', 'content', 'api', 'auth', 'other')
+ERROR_KINDS = ('deleted', 'restricted', 'rate_limit', 'network', 'http', 'storage', 'content', 'api', 'auth', 'other')
 
 INDEXES = {
     'idx_illust_unique': "CREATE UNIQUE INDEX IF NOT EXISTS idx_illust_unique ON illusts (illust_id, page_index)",
@@ -396,13 +404,35 @@ class Database(QueryMixin):
             params.append(int(limit))
         return self.conn.execute(sql, params).fetchall()
 
-    def mark_artist_synced(self, aid, last_synced_id):
-        """水位线只增不减。"""
+    def mark_artist_synced(self, aid, last_synced_id, marks=None):
+        """检查成功：水位线只增不减，并清掉上次失败的记录。marks = {'illust': id, 'manga': id} 是各类型各自的进度。"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self.tx() as c:
             c.execute(
-                "UPDATE artists SET last_synced_id = MAX(COALESCE(last_synced_id,0), ?), last_sync_time = ? "
+                "UPDATE artists SET last_synced_id = MAX(COALESCE(last_synced_id,0), ?), last_sync_time = ?, "
+                "sync_status = 'ok', sync_error_kind = NULL, sync_error = NULL, sync_fail_count = 0 "
                 "WHERE author_id = ?", (int(last_synced_id or 0), now, aid))
+            for typ, value in (marks or {}).items():
+                if typ in ('illust', 'manga') and value is not None:
+                    c.execute(f"UPDATE artists SET wm_{typ} = MAX(COALESCE(wm_{typ},0), ?) WHERE author_id = ?",
+                              (int(value), aid))
+
+    def mark_artist_sync_failed(self, aid, kind, message):
+        """检查失败：记下原因，连续失败次数加一。进度（水位线）不动，下次还会从原来的地方查。"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self.tx() as c:
+            c.execute(
+                "UPDATE artists SET sync_status = 'failed', sync_error_kind = ?, sync_error = ?, sync_error_time = ?, "
+                "sync_fail_count = COALESCE(sync_fail_count,0) + 1 WHERE author_id = ?",
+                (kind, (message or '')[:300], now, aid))
+
+    def get_artist_marks(self, aid):
+        """各类型的检查进度 {'illust': id, 'manga': id}；没有单独记过的类型沿用 last_synced_id。"""
+        row = self.conn.execute(
+            "SELECT COALESCE(last_synced_id,0), wm_illust, wm_manga FROM artists WHERE author_id = ?", (aid,)).fetchone()
+        if not row:
+            return {'illust': 0, 'manga': 0}
+        return {'illust': row[0] if row[1] is None else row[1], 'manga': row[0] if row[2] is None else row[2]}
 
     def get_artist_summaries(self):
         """所有画师 + 任务统计 + 最近新增 + 置顶/备注（给前端/报表用），返回 dict 列表。"""
@@ -460,9 +490,10 @@ class Database(QueryMixin):
             task_key = data.get('task_key')
             if task_key:
                 cur = c.execute(
-                    "INSERT OR IGNORE INTO illusts (task_key, illust_id, page_index, url, media_type, status) "
-                    "VALUES (?,?,?,?,?,0)",
-                    (task_key, iid, data.get('page_index', 0), data.get('url'), data.get('media_type', 'image')))
+                    "INSERT OR IGNORE INTO illusts (task_key, illust_id, page_index, url, media_type, status, "
+                    "created_at, origin) VALUES (?,?,?,?,?,0,?,?)",
+                    (task_key, iid, data.get('page_index', 0), data.get('url'), data.get('media_type', 'image'),
+                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data.get('origin')))
                 new_task = cur.rowcount > 0
                 url = data.get('url')
                 if url and '://' in url and not url.startswith(('ugoira://', 'novel://')):
@@ -511,26 +542,40 @@ class Database(QueryMixin):
             out.update({iid: int(lv) for iid, lv in cur.fetchall()})
         return out
 
-    def get_pending_tasks(self, author_id=None, limit=None, max_attempts=None, author_ids=None):
+    def get_pending_tasks(self, author_id=None, limit=None, max_attempts=None, author_ids=None, filters=None):
         """待处理任务（status 0 / -1）。返回 10 列：
-        task_key, illust_id, page_index, author_id, title, url, media_type, create_date, tags, page_count"""
-        query = (f"SELECT {self._TASK_COLS} FROM illusts i "
-                 "LEFT JOIN illust_metadata m ON i.illust_id = m.illust_id WHERE i.status IN (0, -1)")
-        params = []
-        if max_attempts is not None:
-            query += " AND (i.attempts IS NULL OR i.attempts < ?)"
-            params.append(max_attempts)
+        task_key, illust_id, page_index, author_id, title, url, media_type, create_date, tags, page_count
+
+        filters（都可以不给）：types 作品类型、date_from / date_to 投稿日期、exclude_r18、origin、
+        exclude_author_ids、keys 指定的任务、max_per_artist 每位画师最多多少个文件。见 QueryMixin.pending_where。"""
+        f = dict(filters or {})
         if author_id:
-            query += " AND m.author_id = ?"
-            params.append(author_id)
-        if author_ids:
-            query += f" AND m.author_id IN ({','.join('?' * len(author_ids))})"
-            params += [int(a) for a in author_ids]
-        query += " ORDER BY m.author_id, i.illust_id, i.page_index"
+            f['author_ids'] = [author_id]
+        elif author_ids:
+            f['author_ids'] = list(author_ids)
+        where, params = self.pending_where(f, max_attempts)
+        query = (f"SELECT {self._TASK_COLS} FROM illusts i "
+                 f"LEFT JOIN illust_metadata m ON i.illust_id = m.illust_id WHERE {where} "
+                 "ORDER BY m.author_id, i.illust_id, i.page_index")
+        rows = self.conn.execute(query, params).fetchall()
+        per_artist = int(f.get('max_per_artist') or 0)
+        if per_artist > 0:
+            # 每位画师只取最新的若干个作品的文件（按作品号从大到小），同一个作品的各页不拆开
+            by_artist = {}
+            for row in rows:
+                by_artist.setdefault(row[3], []).append(row)
+            rows = []
+            for artist_rows in by_artist.values():
+                kept, works = [], set()
+                for row in sorted(artist_rows, key=lambda r: (-r[1], r[2])):
+                    if row[1] not in works and len(kept) >= per_artist:
+                        break
+                    works.add(row[1])
+                    kept.append(row)
+                rows += sorted(kept, key=lambda r: (r[1], r[2]))
         if limit:
-            query += " LIMIT ?"
-            params.append(int(limit))
-        return self.conn.execute(query, params).fetchall()
+            rows = rows[:int(limit)]
+        return rows
 
     def count_pending(self, author_id=None, max_attempts=None):
         q = ("SELECT COUNT(*) FROM illusts i LEFT JOIN illust_metadata m ON i.illust_id = m.illust_id "
@@ -606,7 +651,8 @@ class Database(QueryMixin):
         total = self.conn.execute("SELECT COUNT(*)" + base, params).fetchone()[0]
         cur = self.conn.execute(
             "SELECT i.task_key, i.illust_id, i.page_index, i.media_type, i.status, i.attempts, i.file_size, "
-            "i.updated_at, i.last_error, i.error_kind, m.author_id, m.title" + base +
+            "i.updated_at, i.last_error, i.error_kind, m.author_id, m.title, "
+            "(SELECT author_name FROM artists a WHERE a.author_id = m.author_id) AS author_name" + base +
             " ORDER BY i.updated_at DESC, i.task_key LIMIT ? OFFSET ?", params + [int(limit), int(offset)])
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, r)) for r in cur.fetchall()], total
@@ -660,12 +706,17 @@ class Database(QueryMixin):
             else:
                 c.execute("UPDATE illusts SET status = ?, updated_at = ? WHERE task_key = ?", (status, now, task_key))
 
-    def mark_failed(self, task_key, kind, message, permanent=False, max_attempts=3):
-        """记录一次失败：状态置为失败，保存原因；permanent 时直接用满重试次数。返回新的 attempts。"""
+    def mark_failed(self, task_key, kind, message, permanent=False, max_attempts=3, count_attempt=True):
+        """记录一次失败：状态置为失败，保存原因；permanent 时直接用满重试次数。返回新的 attempts。
+
+        count_attempt=False：只记原因，不占重试次数（被限速不是这个文件的问题）。"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         kind = kind if kind in ERROR_KINDS else 'other'
         with self.tx() as c:
-            if permanent:
+            if not permanent and not count_attempt:
+                c.execute("UPDATE illusts SET status = -1, updated_at = ?, last_error = ?, error_kind = ? "
+                          "WHERE task_key = ?", (now, (message or '')[:500], kind, task_key))
+            elif permanent:
                 c.execute("UPDATE illusts SET status = -1, attempts = ?, updated_at = ?, last_error = ?, "
                           "error_kind = ? WHERE task_key = ?", (max_attempts, now, (message or '')[:500], kind, task_key))
             else:
@@ -784,5 +835,6 @@ class Database(QueryMixin):
             'tasks': sum(by_status.values()),
             'done': by_status.get(1, 0), 'pending': by_status.get(0, 0),
             'running': by_status.get(2, 0), 'failed': by_status.get(-1, 0), 'ignored': by_status.get(-2, 0),
+            'skipped': by_status.get(-3, 0),
             'bytes_done': bytes_done, 'by_type': by_type,
         }

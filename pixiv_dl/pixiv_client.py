@@ -4,7 +4,7 @@ import threading
 import time
 
 from pixiv_dl.config import Config
-from pixiv_dl import interrupt
+from pixiv_dl import interrupt, ratelimit
 
 logger = logging.getLogger("PixivDownloader")
 
@@ -102,32 +102,42 @@ class PixivClient:
 
         - NOT_FOUND 立即返回，不重试
         - AUTH 重新认证后重试
-        - RATE_LIMIT 长等待后重试
+        - RATE_LIMIT 这个账号的所有线程一起等（见 pixiv_dl/ratelimit.py），等待不算重试次数；
+          一个任务里等得太久才返回 RATE_LIMIT 错误
         - 其他错误/异常按指数退避重试，次数 Config.MAX_RETRIES
         """
         last = None
         retries = max(1, int(getattr(Config, 'MAX_RETRIES', 3)))
-        for attempt in range(retries):
-            if interrupt.is_set():
+        attempt = 0
+        while attempt < retries:
+            if interrupt.wait_if_paused() or ratelimit.gate.wait(self.name) or interrupt.is_set():
                 return None, ApiError(INTERRUPTED, "interrupted")
+            if ratelimit.gate.exhausted(self.name):
+                return None, ApiError(RATE_LIMIT, "被限速的时间太长，这次不再使用这个账号")
             try:
                 res = func(*args, **kwargs)
             except Exception as e:
                 last = ApiError(OTHER, str(e))
-                if interrupt.wait(min(5 * (attempt + 1), 30)):
+                attempt += 1
+                if interrupt.wait(min(5 * attempt, 30)):
                     return None, ApiError(INTERRUPTED, "interrupted")
                 continue
             if res and "error" not in res:
+                ratelimit.gate.ok(self.name)
                 return res, None
             last = classify_error(res)
             if last.kind == NOT_FOUND:
                 return None, last
+            if last.kind == RATE_LIMIT:
+                if not ratelimit.gate.trip(self.name):
+                    return None, last
+                continue                      # 等够了再试，不占重试次数
+            attempt += 1
             if last.kind == AUTH:
                 if self.auth(force=True) is None:
                     return None, last
                 continue
-            wait = 30 * (attempt + 1) if last.kind == RATE_LIMIT else 2 * (attempt + 1)
-            if interrupt.wait(wait):
+            if interrupt.wait(2 * attempt):
                 return None, ApiError(INTERRUPTED, "interrupted")
         return None, last
 

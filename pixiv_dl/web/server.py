@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -109,6 +110,7 @@ SETTINGS_SPEC = {
     'MAIN_ACCOUNT_SYNC_THREADS': _int_range(1, 8), 'BACKUP_ACCOUNT_SYNC_THREADS': _int_range(1, 8),
     'MAIN_ACCOUNT_DOWNLOAD_THREADS': _int_range(1, 8), 'BACKUP_ACCOUNT_DOWNLOAD_THREADS': _int_range(1, 8),
     'METADATA_REFRESH_LIMIT': _int_range(0, 1000), 'FAILURE_RATE_THRESHOLD': _float_range(0.1, 0.9),
+    'REVIEW_THRESHOLD': _int_range(0, 1000000),
     'RATE_LIMIT_ENABLED': _bool, 'SYNC_NOVELS': _bool, 'UGOIRA_PREFER_HQ': _bool, 'UGOIRA_WEBP_LOSSLESS': _bool,
     'SYNC_TYPES': _types, 'DELAY_SYNC': _pair, 'DELAY_DOWNLOAD': _pair, 'MAX_RETRIES': _int_range(1, 10),
     'DB_AUTO_BACKUP_DAYS': _int_range(0, 365), 'DB_BACKUP_KEEP': _int_range(1, 50), 'DB_JOURNAL': _choice('delete', 'wal'),
@@ -150,10 +152,87 @@ class JobRunner:
             v = p.get('limit')
             return int(v) if str(v or '').isdigit() and int(v) > 0 else None
 
+        def opt_ids(key='author_ids'):
+            raw = p.get(key)
+            if not raw:
+                return None
+            if not isinstance(raw, list):
+                raise HttpError(400, f"{key} 必须是列表")
+            try:
+                return [int(x) for x in raw][:5000]
+            except (TypeError, ValueError):
+                raise HttpError(400, f"{key} 必须是数字列表")
+
+        def names(key):
+            raw = p.get(key)
+            if not raw:
+                return None
+            if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+                raise HttpError(400, f"{key} 必须是字符串列表")
+            return raw
+
+        def sync_options():
+            scope = p.get('scope') or 'all'
+            if scope not in ('all', 'failed', 'never', 'stale', 'gone'):
+                raise HttpError(400, "不认识的检查范围")
+            out = {'scope': scope}
+            if scope == 'stale':
+                try:
+                    out['stale_days'] = max(0.0, float(p.get('stale_days') or 7))
+                except (TypeError, ValueError):
+                    raise HttpError(400, "stale_days 必须是数字")
+            if p.get('resume_since'):
+                out['resume_since'] = str(p['resume_since'])[:19]
+            if p.get('backfill'):
+                out['backfill'] = [t for t in (names('backfill') or []) if t in ('illust', 'manga')]
+            return out
+
+        def filters():
+            f = {}
+            types = [t for t in (names('types') or []) if t in ('illust', 'manga', 'ugoira', 'novel')]
+            if types and len(types) < 4:
+                f['types'] = types
+            for key in ('date_from', 'date_to'):
+                v = str(p.get(key) or '').strip()
+                if v:
+                    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+                        raise HttpError(400, "日期要写成 2026-01-31 这样")
+                    f[key] = v
+            if p.get('exclude_r18'):
+                f['exclude_r18'] = True
+            if p.get('origin') in ('new', 'old'):
+                f['origin'] = p['origin']
+            ex = opt_ids('exclude_author_ids')
+            if ex:
+                f['exclude_author_ids'] = ex
+            per = p.get('max_per_artist')
+            if str(per or '').isdigit() and int(per) > 0:
+                f['max_per_artist'] = int(per)
+            return f or None
+
+        def review_over():
+            if p.get('review') == 'never':
+                return None
+            if p.get('review') == 'always':
+                return -1                     # 任何数量都先看
+            return int(getattr(Config, 'REVIEW_THRESHOLD', 0) or 0) or None
+
+        def retry_args():
+            keys, kinds = p.get('keys'), p.get('kinds')
+            if not keys and not kinds and not p.get('author_id'):
+                raise HttpError(400, "请选择要重试的文件")
+            aid_ = p.get('author_id')
+            return {'keys': keys or None, 'kinds': kinds or None,
+                    'author_id': int(aid_) if str(aid_ or '').isdigit() else None}
+
         table = {
-            'sync': lambda: pro.sync(deep=bool(p.get('deep'))),
-            'sync_download': lambda: pro.sync_and_download(deep=bool(p.get('deep')), limit=limit()),
-            'download': lambda: pro.download(limit=limit()),
+            'sync': lambda: pro.sync(deep=bool(p.get('deep')), aids=opt_ids(), accounts=names('accounts'), **sync_options()),
+            'sync_download': lambda: pro.sync_and_download(
+                deep=bool(p.get('deep')), limit=limit(), aids=opt_ids(), sync_options=sync_options(), filters=filters(),
+                accounts=names('accounts'), review_over=review_over()),
+            'download': lambda: pro.download(limit=limit(), aids=opt_ids(), filters=filters(), accounts=names('accounts')),
+            'retry_now': lambda: pro.retry_now(**retry_args()),
+            'recheck_gone': lambda: pro.sync(scope='gone'),
             'sync_artist': lambda: pro.sync(aid=aid(), deep=True),
             'download_artist': lambda: pro.download(aid=aid()),
             'sync_download_artist': lambda: pro.sync_and_download_artist(aid()),
@@ -171,6 +250,10 @@ class JobRunner:
             aid()  # 提前校验参数
         if kind.endswith('_artists'):
             ids()
+        if kind in ('sync', 'sync_download', 'download'):      # 提前校验参数，错了直接告诉界面，而不是等任务跑起来才失败
+            opt_ids(), names('accounts'), sync_options(), filters()
+        if kind == 'retry_now':
+            retry_args()
         return table[kind]
 
     def start(self, kind, params):
@@ -192,6 +275,23 @@ class JobRunner:
         if self.running:
             interrupt.set()
             self.pro.job.set(stopping=True, message="正在停止，等待当前文件处理完…")
+            return True
+        return False
+
+    def pause(self):
+        """暂停：正在处理的文件做完后，各线程停下来等，进度保留；继续时接着做。"""
+        if self.running and not interrupt.is_paused():
+            interrupt.pause()
+            self.pro.job.log("已暂停（正在处理的文件做完后停下）")
+            self.pro.job.set(message="已暂停")
+            return True
+        return False
+
+    def resume(self):
+        if self.running and interrupt.is_paused():
+            interrupt.resume()
+            self.pro.job.log("继续")
+            self.pro.job.set(message="")
             return True
         return False
 
@@ -344,6 +444,93 @@ def api_job_stop(r):
     return {"ok": True, "stopped": r.app.runner.stop()}
 
 
+@route("POST", r"/api/job/pause")
+def api_job_pause(r):
+    return {"ok": True, "paused": r.app.runner.pause()}
+
+
+@route("POST", r"/api/job/resume")
+def api_job_resume(r):
+    return {"ok": True, "resumed": r.app.runner.resume()}
+
+
+# ---- 待下载：先看再下 / 不下载
+def _pending_filters(body):
+    f = body.get("filters") if isinstance(body.get("filters"), dict) else {}
+    out = {}
+    for key in ("author_ids", "exclude_author_ids"):
+        if f.get(key):
+            try:
+                out[key] = [int(x) for x in f[key]][:5000]
+            except (TypeError, ValueError):
+                raise HttpError(400, f"{key} 必须是数字列表")
+    types = [t for t in (f.get("types") or []) if t in ("illust", "manga", "ugoira", "novel")]
+    if types:
+        out["types"] = types
+    for key in ("date_from", "date_to"):
+        if f.get(key):
+            out[key] = str(f[key])[:10]
+    if f.get("exclude_r18"):
+        out["exclude_r18"] = True
+    if f.get("origin") in ("new", "old"):
+        out["origin"] = f["origin"]
+    return out
+
+
+@route("POST", r"/api/pending/summary")
+def api_pending_summary(r):
+    """待下载的东西按画师汇总（文件数、作品数、类型、估算大小），可以带筛选条件。skipped=true 看“不下载”的那些。"""
+    status = (-3,) if r.body.get("skipped") else (0, -1)
+    data = r.app.db.pending_summary(_pending_filters(r.body), Config.MAX_ATTEMPTS if not r.body.get("skipped") else None, status)
+    data["skipped_total"] = r.app.db.stats()["skipped"]
+    return data
+
+
+@route("POST", r"/api/pending/skip")
+def api_pending_skip(r):
+    """把符合条件的待下载标成“不下载”（restore=true 是恢复）。必须给出条件，不能一次全标。"""
+    f = _pending_filters(r.body)
+    restore = bool(r.body.get("restore"))
+    if not f and not (restore and r.body.get("all")):
+        raise HttpError(400, "请先选择画师或条件")
+    if r.app.runner.running:
+        raise HttpError(409, "任务运行中，先暂停或等它结束再调整")
+    n = r.app.db.skip_tasks(f, restore=restore)
+    r.app.invalidate()
+    return {"ok": True, "count": n}
+
+
+# ---- 检查失败的画师
+_SYNC_FAIL_ORDER = ("rate_limit", "network", "auth", "other", "gone")
+
+
+@route("GET", r"/api/sync/failures")
+def api_sync_failures(r):
+    db = r.app.db
+    groups = {}
+    for item in db.sync_failures():
+        kind = item["kind"] if item["kind"] in _SYNC_FAIL_ORDER else "other"
+        groups.setdefault(kind, []).append(item)
+    return {"groups": [{"kind": k, "count": len(groups[k]), "items": groups[k]} for k in _SYNC_FAIL_ORDER if k in groups],
+            "total": sum(len(v) for v in groups.values()),
+            "skipped": db.sync_skipped()}
+
+
+@route("POST", r"/api/sync/skip")
+def api_sync_skip(r):
+    """“不再检查”这些画师（restore=true 恢复）。只是以后检查时跳过，不删任何东西。"""
+    raw = r.body.get("author_ids")
+    if not isinstance(raw, list) or not raw:
+        raise HttpError(400, "请先选择画师")
+    try:
+        ids = [int(x) for x in raw]
+    except (TypeError, ValueError):
+        raise HttpError(400, "author_ids 必须是数字列表")
+    n = r.app.db.set_sync_skip(ids, skip=not r.body.get("restore"))
+    r.app.invalidate()
+    return {"ok": True, "count": n}
+
+
 @route("GET", r"/api/logs")
 def api_logs(r):
     return {"items": MEMORY_HANDLER.since(r.qint("since", 0, lo=0))}
@@ -463,7 +650,7 @@ def api_add_illust(r):
 @route("GET", r"/api/tasks")
 def api_tasks(r):
     status = r.qs("status")
-    st = {"pending": 0, "done": 1, "running": 2, "failed": -1, "ignored": -2}.get(status)
+    st = {"pending": 0, "done": 1, "running": 2, "failed": -1, "ignored": -2, "skipped": -3}.get(status)
     per = r.qint("per", 50, 1, 200)
     page = r.qint("page", 1, 1)
     author = r.qs("author")
@@ -530,7 +717,31 @@ def api_plan(r):
     plan["last_sync_run"] = ({"id": last["id"], "status": last["status"], "finished": last["finished"]}
                              if last else None)
     plan["running"] = app.runner.running
+    stats = app.db.stats()
+    plan["skipped_total"] = stats["skipped"]
+    plan["review_threshold"] = int(getattr(Config, "REVIEW_THRESHOLD", 0) or 0)
+    plan["sync_failed"] = len([x for x in app.db.sync_failures() if not x["gone"]])
+    plan["resume"] = _resume_info(app.db)
     return plan
+
+
+def _resume_info(db):
+    """上一次“检查全部”要是没查完（被停止、或者账号被限速太久），告诉界面还能接着查：{since, remaining}"""
+    last = db.last_run(["sync", "sync_download"])
+    if not last:
+        return None
+    run = db.get_run(last["id"]) or {}
+    params = run.get("params") or {}
+    result = (run.get("summary") or {}).get("result") or {}
+    scope = params.get("scope") or (params.get("sync_options") or {}).get("scope")
+    if scope not in (None, "all") or params.get("aid") or params.get("aids"):
+        return None
+    if last["status"] not in ("cancelled", "error") and not result.get("unchecked"):
+        return None
+    since = datetime.fromtimestamp(last["started"]).strftime("%Y-%m-%d %H:%M:%S")
+    remaining = sum(1 for s in db.artist_sync_states().values()
+                    if s["followed"] and not s["gone"] and not s["skip"] and (s["last"] or "") < since)
+    return {"since": since, "remaining": remaining} if remaining else None
 
 
 @route("GET", r"/api/runs")

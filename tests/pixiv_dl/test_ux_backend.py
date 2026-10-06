@@ -120,7 +120,7 @@ def test_sync_reports_new_works_per_artist(cfg, no_sleep):
     pro, _ = make_processor(api)
     pro.sync()
     d = pro.job.snapshot()['detail']['new']
-    assert d['10'] == {'name': 'Alice', 'works': 2, 'files': 4, 'is_new_artist': 1}
+    assert d['10'] == {'name': 'Alice', 'works': 2, 'files': 4, 'old': 0, 'is_new_artist': 1}
     assert '20' not in d
     assert pro.job.result['new_works'] == 2 and pro.job.result['new_files'] == 4 and pro.job.result['artists_with_new']== 1
     pro.sync()

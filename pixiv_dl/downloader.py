@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from pixiv_dl import interrupt, visibility
+from pixiv_dl import interrupt, ratelimit, visibility
 from pixiv_dl.config import Config
 from pixiv_dl.database import Database, ST_DONE, ST_FAILED
 from pixiv_dl.extract import _g, extract_pages, is_visible, ugoira_info, ugoira_zip_candidates, url_ext
@@ -46,6 +46,8 @@ def kind_of(e):
     if isinstance(e, HttpStatus):
         if e.code in (404, 410):
             return 'deleted'
+        if e.code == 429:
+            return 'rate_limit'
         if e.code in (400, 401, 403):
             return 'http'
         return 'network'
@@ -100,6 +102,13 @@ class Throttle:
                         if threshold > 0 and self._count % threshold == 0:
                             self._pause(rules[threshold], f"已下载 {self._count} 个文件，风控休息")
                             break
+
+    def hold(self, seconds, reason):
+        """所有下载线程一起停一会儿"""
+        with self._lock:
+            self._window.clear()
+            if self._resume_at - time.time() < seconds * 0.5:
+                self._pause(seconds, reason)
 
     def remaining(self):
         return max(0.0, self._resume_at - time.time())
@@ -182,7 +191,9 @@ class DownloadMixin:
 
     # ------------------------------------------------------------------ 失败记录
     def _fail_task(self, db, task_key, msg, permanent=False, kind='other'):
-        n = db.mark_failed(task_key, kind, msg, permanent=permanent, max_attempts=Config.MAX_ATTEMPTS)
+        # 被限速不是这个文件的问题：只记原因，不占它的重试次数
+        n = db.mark_failed(task_key, kind, msg, permanent=permanent, max_attempts=Config.MAX_ATTEMPTS,
+                           count_attempt=kind != 'rate_limit')
         self.job.tally('fail_kinds', kind, count=1)
         if permanent:
             if kind not in ('deleted', 'restricted'):   # 已删除 / 无权查看是常见情况，只记失败原因，不刷告警
@@ -244,6 +255,8 @@ class DownloadMixin:
             raise
         except _NotVisible:
             raise                       # 交给 download：换一个账号再试
+        except _RateLimited:
+            raise                       # 交给 download：这个作品放回队列，不算失败
         except _GroupError as e:
             results = {k: ('fail', e.message, e.permanent, e.kind) for k in keys}
         except Exception as e:
@@ -264,7 +277,9 @@ class DownloadMixin:
                 self._fail_task(db, k, rest[0], permanent=rest[1], kind=rest[2] if len(rest) > 2 else 'other')
                 job.add(done=1, failed=1)
                 job.worker_add(client.name, failed=1)
-                if not rest[1]:  # 作品已删除/地址失效是确定性结果，不代表被限速，不计入失败率
+                if len(rest) > 2 and rest[2] == 'rate_limit':
+                    throttle.hold(60, "图片服务器限速")
+                elif not rest[1]:  # 作品已删除/地址失效是确定性结果，不代表被限速，不计入失败率
                     throttle.record(False)
         return used_api
 
@@ -442,16 +457,20 @@ class DownloadMixin:
             # “找不到”可能是真的删了，也可能只是这个账号看不到（看不到的作品，动图接口就返回 Page not found）。
             # 先换别的账号试，都不行才下结论（见 download 里的处理）
             raise _NotVisible(f"{prefix}: {err.message}", restricted=False)
-        raise _GroupError(f"{prefix}: {err.message}", permanent=False,
-                          kind='network' if err.kind == RATE_LIMIT else 'api')
+        if err.kind == RATE_LIMIT:
+            raise _RateLimited(f"{prefix}: {err.message}")
+        raise _GroupError(f"{prefix}: {err.message}", permanent=False, kind='api')
 
     # ------------------------------------------------------------------ 主流程
     @job_op('download')
-    def download(self, aid=None, limit=None, aids=None):
-        """阶段 B：下载。多账号并发，每个账号按配置的线程数工作。"""
+    def download(self, aid=None, limit=None, aids=None, filters=None, accounts=None):
+        """阶段 B：下载。多账号并发，每个账号按配置的线程数工作。
+
+        filters：只下载符合条件的（类型、日期、画师、每位画师的数量……见 Database.get_pending_tasks）。
+        accounts：只用这几个账号。"""
         db = Database.local(Config.DB_PATH)
         job = self.job
-        tasks = db.get_pending_tasks(aid, limit, max_attempts=Config.MAX_ATTEMPTS, author_ids=aids)
+        tasks = db.get_pending_tasks(aid, limit, max_attempts=Config.MAX_ATTEMPTS, author_ids=aids, filters=filters)
         if not tasks:
             logger.info("没有待处理任务")
             job.log("没有待处理任务")
@@ -459,6 +478,8 @@ class DownloadMixin:
 
         job.set(phase="认证账号")
         clients = self.ensure_clients()
+        if accounts:
+            clients = {n: c for n, c in clients.items() if n in set(accounts)}
         if not clients:
             raise RuntimeError("没有可用的账号（请先在「账号」页添加并确认 Token 有效）")
         _ = self.storage  # 尽早暴露存储连接问题
@@ -521,6 +542,13 @@ class DownloadMixin:
             wdb = Database.local(Config.DB_PATH)
             me = client.name
             while not interrupt.is_set():
+                if interrupt.is_paused():
+                    job.worker_set(me, state='paused', text='已暂停')
+                if interrupt.wait_if_paused() or ratelimit.gate.wait(me):
+                    return
+                if ratelimit.gate.exhausted(me):
+                    job.worker_set(me, state='stopped', text='', note='被限速太久，这次不再使用')
+                    return
                 # 取任务和“手里有任务”的计数要一起做：否则别的线程会在这一瞬间以为没活了而退出，
                 # 之后被放回队列的作品就没有账号可以接手
                 with state_lock:
@@ -571,6 +599,12 @@ class DownloadMixin:
                         tried[me] = e.restricted
                         blind[(me, aid)] = blind.get((me, aid), 0) + 1
                     q.put((iid, mt, ts, tried))               # 换别的账号；都试过之后由 give_up 收尾
+                except _RateLimited:
+                    used_api = True
+                    q.put((iid, mt, ts, tried))               # 不算失败：等限速过去，或者留给别的账号 / 下次
+                    job.log(f"账号 {me} 被限速太久，停用；没下完的留在待下载里")
+                    job.worker_set(me, state='stopped', text='', note='被限速太久，这次不再使用')
+                    return
                 except AuthBroken as e:
                     logger.error(f"账号 '{client.name}' 认证失效，停止该账号的下载线程: {e}")
                     job.log(f"账号 {client.name} 认证失效，已停用")
@@ -634,6 +668,10 @@ class _NotVisible(Exception):
         super().__init__(message)
         self.message = message
         self.restricted = restricted
+
+
+class _RateLimited(Exception):
+    """这个账号被限速到没法继续了（已经在闸前等过，预算用完）。作品放回队列，不算失败。"""
 
 
 class _GroupError(Exception):

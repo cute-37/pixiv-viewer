@@ -34,9 +34,14 @@ def cfg(tmp_path, monkeypatch):
         'PROXY_MODE': '', 'PROXY_URL': '',
     }.items():
         monkeypatch.setattr(Config, k, v)
+    from pixiv_dl import ratelimit
+    monkeypatch.setattr(ratelimit, 'STEPS', (0.01, 0.01, 0.01))
+    monkeypatch.setattr(ratelimit, 'BUDGET', 0.05)
+    ratelimit.reset()
     interrupt.clear()
     yield Config
     interrupt.clear()
+    ratelimit.reset()
 
 
 @pytest.fixture

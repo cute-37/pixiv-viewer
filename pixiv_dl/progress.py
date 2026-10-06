@@ -46,14 +46,16 @@ class JobState:
             for k, v in kw.items():
                 setattr(self, k, v)
 
-    def tally(self, group, key, name=None, note=None, **inc):
-        """累计明细：detail[group][key] = {name, note, 计数...}。线程安全。"""
+    def tally(self, group, key, name=None, note=None, kind=None, **inc):
+        """累计明细：detail[group][key] = {name, note, kind, 计数...}。线程安全。"""
         with self._lock:
             entry = self.detail.setdefault(group, {}).setdefault(str(key), {})
             if name is not None:
                 entry['name'] = name
             if note is not None:
                 entry['note'] = note
+            if kind is not None:
+                entry['kind'] = kind
             for k, v in inc.items():
                 entry[k] = entry.get(k, 0) + v
 
@@ -140,11 +142,25 @@ class JobState:
                 "message": self.message, "error": self.error, "result": self.result,
                 "started": self.started, "finished": self.finished, "elapsed": round(elapsed, 1),
                 "current": dict(self.current), "workers": [dict(w) for w in self.workers.values()], "stopping": self.stopping, "run_id": self.run_id,
+                "paused": self.status == "running" and interrupt.is_paused(),
                 "detail": {g: {k: dict(v) for k, v in d.items()} for g, d in self.detail.items()},
             }
             if with_logs:
                 snap["logs"] = [{"t": t, "msg": m} for t, m in self._logs]
             return snap
+
+
+def _plain_params(kwargs):
+    """任务参数里能原样存进记录的部分（长列表只留个数，免得一条记录存几千个编号）"""
+    out = {}
+    for k, v in kwargs.items():
+        if isinstance(v, (int, float, str, bool, type(None))):
+            out[k] = v
+        elif isinstance(v, (list, tuple)):
+            out[k] = list(v) if len(v) <= 20 else {"count": len(v)}
+        elif isinstance(v, dict):
+            out[k] = _plain_params(v)
+    return out
 
 
 def job_op(kind):
@@ -160,7 +176,9 @@ def job_op(kind):
             outer = self._job_depth == 0
             if outer:
                 interrupt.clear()
-                self.job = JobState(kind, {k: v for k, v in kwargs.items() if isinstance(v, (int, float, str, bool, type(None)))})
+                self.job = JobState(kind, _plain_params(kwargs))
+                from pixiv_dl import ratelimit
+                ratelimit.reset(self.job)
             if outer:
                 hook = getattr(self, '_on_job_start', None)
                 if hook is not None:

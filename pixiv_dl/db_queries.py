@@ -78,6 +78,131 @@ class QueryMixin:
         with self.tx() as c:
             return c.execute(f"UPDATE illusts SET status = ? WHERE {w}", [dst] + p).rowcount
 
+    # ------------------------------------------------------------------ 待下载：筛选、汇总、跳过
+    # 用户看到的四种作品类型：插画 illust、漫画 manga、动图 ugoira、小说 novel
+    WTYPE_SQL = ("CASE WHEN i.media_type = 'novel' THEN 'novel' "
+                 "WHEN i.media_type = 'ugoira' OR m.illust_type = 2 THEN 'ugoira' "
+                 "WHEN m.illust_type = 1 THEN 'manga' ELSE 'illust' END")
+
+    def pending_where(self, filters=None, max_attempts=None, status=(0, -1)):
+        """把筛选条件变成 SQL 的 WHERE（表别名 i = illusts，m = illust_metadata）。返回 (where, params)。"""
+        f = filters or {}
+        where = [f"i.status IN ({','.join(str(int(x)) for x in status)})"]
+        params = []
+        if max_attempts is not None and -1 in status:
+            where.append("(i.attempts IS NULL OR i.attempts < ?)")
+            params.append(max_attempts)
+        for key, op in (('author_ids', 'IN'), ('exclude_author_ids', 'NOT IN')):
+            ids = [int(x) for x in (f.get(key) or [])]
+            if ids:
+                where.append(f"m.author_id {op} ({','.join('?' * len(ids))})")
+                params += ids
+        types = [t for t in (f.get('types') or []) if t in ('illust', 'manga', 'ugoira', 'novel')]
+        if types:
+            where.append(f"{self.WTYPE_SQL} IN ({','.join('?' * len(types))})")
+            params += types
+        if f.get('date_from'):
+            where.append("substr(COALESCE(m.create_date,''), 1, 10) >= ?")
+            params.append(str(f['date_from'])[:10])
+        if f.get('date_to'):
+            where.append("substr(COALESCE(m.create_date,''), 1, 10) <= ?")
+            params.append(str(f['date_to'])[:10])
+        if f.get('exclude_r18'):
+            where.append("COALESCE(m.x_restrict, 0) = 0")
+        if f.get('origin') in ('new', 'old'):
+            where.append("COALESCE(i.origin, 'new') = ?")
+            params.append(f['origin'])
+        keys = [str(k) for k in (f.get('keys') or [])]
+        if keys:
+            where.append(f"i.task_key IN ({','.join('?' * len(keys))})")
+            params += keys
+        return " AND ".join(where), params
+
+    def pending_summary(self, filters=None, max_attempts=None, status=(0, -1)):
+        """待下载的东西按画师汇总，给“先看再下”用。
+
+        返回 {"artists": [{author_id, name, files, works, illust, manga, ugoira, novel, old, r18, est_bytes,
+        newest, is_new_artist}], "totals": {...}}。大小是估算的：用已下载文件里各类型的平均大小。"""
+        where, params = self.pending_where(filters, max_attempts, status)
+        avg = dict(self.conn.execute(
+            "SELECT media_type, AVG(file_size) FROM illusts WHERE status = 1 AND file_size > 0 GROUP BY media_type").fetchall())
+        default = avg.get('image') or 2 * 1024 * 1024
+        cur = self.conn.execute(
+            f"SELECT m.author_id, {self.WTYPE_SQL} AS wtype, i.media_type, COUNT(*) AS files, "
+            "COUNT(DISTINCT i.illust_id) AS works, SUM(COALESCE(i.origin, 'new') = 'old') AS old, "
+            "SUM(COALESCE(m.x_restrict, 0) > 0) AS r18, MAX(substr(COALESCE(m.create_date,''), 1, 10)) AS newest "
+            "FROM illusts i LEFT JOIN illust_metadata m ON i.illust_id = m.illust_id "
+            f"WHERE {where} GROUP BY m.author_id, wtype, i.media_type", params)
+        artists = {}
+        for aid, wtype, media, files, works, old, r18, newest in cur.fetchall():
+            a = artists.setdefault(aid, {'author_id': aid, 'files': 0, 'works': 0, 'illust': 0, 'manga': 0, 'ugoira': 0,
+                                         'novel': 0, 'old': 0, 'r18': 0, 'est_bytes': 0, 'newest': ''})
+            a['files'] += files
+            a['works'] += works
+            a[wtype] += files
+            a['old'] += old or 0
+            a['r18'] += r18 or 0
+            a['est_bytes'] += int(files * (avg.get(media) or (2000 if media == 'novel' else default)))
+            a['newest'] = max(a['newest'], newest or '')
+        info = {r[0]: r for r in self.conn.execute(
+            "SELECT a.author_id, a.author_name, a.is_followed, "
+            "(SELECT COUNT(*) FROM illusts i2 JOIN illust_metadata m2 ON m2.illust_id = i2.illust_id "
+            " WHERE m2.author_id = a.author_id AND i2.status = 1) FROM artists a")} if artists else {}
+        for aid, a in artists.items():
+            row = info.get(aid)
+            a['name'] = (row[1] if row else None) or f"画师 {aid}"
+            a['is_new_artist'] = 0 if (row and row[3]) else 1      # 这位画师还没有任何已下载的文件
+        items = sorted(artists.values(), key=lambda a: -a['files'])
+        keys = ('files', 'works', 'illust', 'manga', 'ugoira', 'novel', 'old', 'r18', 'est_bytes')
+        totals = {k: sum(a[k] for a in items) for k in keys}
+        totals['artists'] = len(items)
+        return {'artists': items, 'totals': totals}
+
+    def skip_tasks(self, filters=None, restore=False):
+        """待下载 ↔ 不下载。只改状态，不删任何记录；restore=True 把“不下载”的恢复成待下载。返回条数。"""
+        src, dst = ((-3,), 0) if restore else ((0, -1), -3)
+        where, params = self.pending_where(filters, None, status=src)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self.tx() as c:
+            return c.execute(
+                "UPDATE illusts SET status = ?, attempts = 0, updated_at = ? WHERE task_key IN ("
+                "SELECT i.task_key FROM illusts i LEFT JOIN illust_metadata m ON i.illust_id = m.illust_id "
+                f"WHERE {where})", [dst, now] + params).rowcount
+
+    # ------------------------------------------------------------------ 检查失败的画师
+    def sync_failures(self):
+        """上次检查没成功的画师（不含已经标记“不再检查”的）。[{author_id, name, kind, error, time, count}]"""
+        cur = self.conn.execute(
+            "SELECT author_id, author_name AS name, COALESCE(sync_error_kind, 'other') AS kind, sync_error AS error, "
+            "sync_error_time AS time, COALESCE(sync_fail_count, 0) AS count, COALESCE(is_deleted, 0) AS gone, "
+            "last_sync_time FROM artists WHERE sync_status = 'failed' AND COALESCE(sync_skip, 0) = 0 "
+            "ORDER BY sync_error_time DESC")
+        return _rows(cur)
+
+    def sync_skipped(self):
+        cur = self.conn.execute(
+            "SELECT author_id, author_name AS name, sync_error_kind AS kind, sync_error AS error, "
+            "COALESCE(is_deleted, 0) AS gone FROM artists WHERE COALESCE(sync_skip, 0) = 1 ORDER BY author_name")
+        return _rows(cur)
+
+    def set_sync_skip(self, author_ids, skip=True):
+        ids = [int(a) for a in author_ids or []]
+        if not ids:
+            return 0
+        with self.tx() as c:
+            return c.execute(f"UPDATE artists SET sync_skip = ? WHERE author_id IN ({','.join('?' * len(ids))})",
+                             [1 if skip else 0] + ids).rowcount
+
+    def artist_sync_states(self):
+        """{author_id: {name, last, status, kind, skip, gone, error_time, followed}}，检查前决定查谁、先查谁用。"""
+        out = {}
+        for r in self.conn.execute(
+                "SELECT author_id, author_name, last_sync_time, sync_status, sync_error_kind, COALESCE(sync_skip,0), "
+                "COALESCE(is_deleted,0), sync_error_time, COALESCE(is_followed,0) FROM artists"):
+            out[r[0]] = {'name': r[1] or '', 'last': r[2] or '', 'status': r[3], 'kind': r[4], 'skip': r[5],
+                         'gone': r[6], 'error_time': r[7] or '', 'followed': r[8]}
+        return out
+
     # ------------------------------------------------------------------ 作品库
     def _work_filters(self, q=None, kind=None, r18=None, ai=None, author_id=None):
         where, params = ["1=1"], []

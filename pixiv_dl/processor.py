@@ -173,11 +173,38 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
 
     # ------------------------------------------------------------------ 组合操作
     @job_op('sync_download')
-    def sync_and_download(self, deep=False, limit=None):
-        self.sync(deep=deep)
+    def sync_and_download(self, deep=False, limit=None, aids=None, sync_options=None, filters=None, accounts=None,
+                          review_over=None):
+        """检查，然后下载。review_over：新发现的文件超过这个数时不直接下，停下来等用户看过再决定。"""
+        summary = self.sync(deep=deep, aids=aids, accounts=accounts, **(sync_options or {})) or {}
         if interrupt.is_set():
             return
-        self.download(limit=limit)
+        found = int(summary.get('new_files') or 0)
+        if review_over and found > int(review_over):
+            self.job.set(result={**self.job.result, 'needs_review': True})
+            self.job.log(f"这次新发现 {found} 个文件，超过了设定的 {int(review_over)} 个：先不下载，等你看过再决定")
+            return
+        self.download(limit=limit, aids=aids, filters=filters, accounts=accounts)
+
+    @job_op('retry_now')
+    def retry_now(self, keys=None, kinds=None, author_id=None):
+        """把选中的失败文件放回待下载，并且马上只下载它们。"""
+        db = self.db
+        where, params = db._failed_where(keys, kinds, author_id)
+        picked = [r[0] for r in db.conn.execute(f"SELECT task_key FROM illusts WHERE {where}", params)]
+        if not picked:
+            self.job.log("没有符合条件的失败文件")
+            return {'tasks': 0}
+        db.retry_tasks(keys=picked[:900]) if len(picked) <= 900 else [
+            db.retry_tasks(keys=picked[i:i + 900]) for i in range(0, len(picked), 900)]
+        total = {'tasks': 0, 'success': 0, 'failed': 0}
+        for i in range(0, len(picked), 900):          # SQLite 一条语句里的参数个数有限，分批下
+            if interrupt.is_set():
+                break
+            part = self.download(filters={'keys': picked[i:i + 900]}) or {}
+            for k in total:
+                total[k] += int(part.get(k) or 0)
+        return total
 
     @job_op('sync_artist_download')
     def sync_and_download_artist(self, aid):

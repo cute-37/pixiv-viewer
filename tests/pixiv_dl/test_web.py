@@ -300,3 +300,75 @@ def test_proxy_test_endpoint_uses_form_values(srv, cfg, monkeypatch):
     st, out, _ = srv.post('/api/settings/test-proxy', {'PROXY_MODE': 'system'})
     assert st == 200 and out['using'].startswith('跟随系统设置')
 
+
+
+# ---------------------------------------------------------------- 待下载的汇总 / 不下载、检查失败、暂停
+def test_pending_summary_and_skip_endpoints(srv, cfg):
+    srv.post('/api/job', {'kind': 'sync'})
+    srv.wait_job()
+    st, data, _ = srv.post('/api/pending/summary', {})
+    assert st == 200 and data['totals']['files'] == 2 and data['artists'][0]['author_id'] == 10
+    st, out, _ = srv.post('/api/pending/skip', {})                       # 不给条件不能一次全标
+    assert st == 400
+    st, out, _ = srv.post('/api/pending/skip', {'filters': {'author_ids': [10]}})
+    assert st == 200 and out['count'] == 2
+    assert srv.post('/api/pending/summary', {})[1]['totals']['files'] == 0
+    skipped = srv.post('/api/pending/summary', {'skipped': True})[1]
+    assert skipped['totals']['files'] == 2 and skipped['skipped_total'] == 2
+    st, tasks, _ = srv.get('/api/tasks?status=skipped')
+    assert tasks['total'] == 2 and tasks['items'][0]['author_name'].startswith('Alice')
+    assert srv.get('/api/plan')[1]['skipped_total'] == 2
+    st, out, _ = srv.post('/api/pending/skip', {'filters': {'author_ids': [10]}, 'restore': True})
+    assert out['count'] == 2 and srv.post('/api/pending/summary', {})[1]['totals']['files'] == 2
+
+
+def test_sync_failures_endpoints_and_scoped_job(srv, cfg):
+    from fakes import err
+    srv.api.errors[('user_illusts', 10)] = err('Internal Server Error')
+    srv.post('/api/job', {'kind': 'sync'})
+    job = srv.wait_job()
+    assert job['failed'] == 1 and job['detail']['failed']['10']['kind'] == 'network'
+    st, data, _ = srv.get('/api/sync/failures')
+    assert data['total'] == 1 and data['groups'][0]['kind'] == 'network' and data['groups'][0]['items'][0]['author_id'] == 10
+    assert srv.get('/api/plan')[1]['sync_failed'] == 1
+    del srv.api.errors[('user_illusts', 10)]
+    srv.post('/api/job', {'kind': 'sync', 'scope': 'failed'})
+    assert srv.wait_job()['success'] == 1
+    assert srv.get('/api/sync/failures')[1]['total'] == 0
+    st, out, _ = srv.post('/api/sync/skip', {'author_ids': [10]})
+    assert out['count'] == 1 and srv.get('/api/sync/failures')[1]['skipped'][0]['author_id'] == 10
+    srv.post('/api/sync/skip', {'author_ids': [10], 'restore': True})
+    assert srv.get('/api/sync/failures')[1]['skipped'] == []
+
+
+@pytest.mark.parametrize('body, expect', [
+    ({'kind': 'sync', 'scope': 'everything'}, '范围'),
+    ({'kind': 'download', 'date_from': '去年'}, '日期'),
+    ({'kind': 'download', 'author_ids': 'abc'}, '列表'),
+    ({'kind': 'sync', 'accounts': 'main'}, '列表'),
+    ({'kind': 'retry_now'}, '选择'),
+])
+def test_job_parameters_are_validated_before_starting(srv, cfg, body, expect):
+    st, out, _ = srv.post('/api/job', body)
+    assert st == 400 and expect in out['error']
+    assert not srv.get('/api/job')[1]['running']
+
+
+def test_pause_and_resume_endpoints(srv, cfg):
+    assert srv.post('/api/job/pause')[1]['paused'] is False              # 没有任务在跑
+    assert srv.post('/api/job/resume')[1]['resumed'] is False
+    assert srv.get('/api/job')[1]['paused'] is False
+    assert srv.get('/api/plan')[1]['review_threshold'] == cfg.REVIEW_THRESHOLD
+
+
+def test_review_setting_and_resume_hint(srv, cfg):
+    st, _, _ = srv.post('/api/settings', {'REVIEW_THRESHOLD': 1})
+    assert st == 200 and cfg.REVIEW_THRESHOLD == 1
+    srv.post('/api/job', {'kind': 'sync_download'})                      # 发现 2 个 > 1：先停下来
+    job = srv.wait_job()
+    assert job['result']['needs_review'] is True and job['success'] == 1
+    assert srv.post('/api/pending/summary', {})[1]['totals']['files'] == 2
+    srv.post('/api/job', {'kind': 'sync_download', 'review': 'never'})   # 明确说不用问
+    job = srv.wait_job()
+    assert 'needs_review' not in job['result']
+    assert srv.get('/api/plan')[1]['resume'] is None                     # 上次查完了，没有可以“接着查”的

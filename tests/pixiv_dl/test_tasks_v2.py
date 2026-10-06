@@ -1,0 +1,369 @@
+"""检查与下载的改进：限速不算失败、检查失败有记录、续查、筛选与“不下载”、暂停、先看再下、马上重试。"""
+import threading
+import time
+
+import pytest
+
+from pixiv_dl import interrupt, ratelimit
+from pixiv_dl.database import Database
+from fakes import FakeAPI, err, make_client, make_illust, make_processor
+
+BLOB = b'\x89PNG' + b'z' * 400
+
+
+def api_with(artists):
+    """artists: {aid: (name, [作品号, 新→旧])}"""
+    api = FakeAPI()
+    api.following['public'] = [(aid, name) for aid, (name, _) in artists.items()]
+    for aid, (name, ids) in artists.items():
+        api.users[aid] = {'name': name}
+        api.illusts[(aid, 'illust')] = [make_illust(i) for i in ids]
+    return api
+
+
+def routes_for(api):
+    routes = {}
+    for items in api.illusts.values():
+        for ill in items:
+            api.details[ill['id']] = ill
+            for i in range(ill['page_count']):
+                routes[f"https://new.example/img/{ill['id']}_p{i}.png"] = BLOB
+    return routes
+
+
+class FlakyAPI(FakeAPI):
+    """前 N 次读作品列表都回“限速”，之后恢复正常"""
+
+    def __init__(self, limited_calls):
+        super().__init__()
+        self.left = limited_calls
+
+    def user_illusts(self, user_id, type='illust', offset=None, **kw):
+        with self.lock:
+            if self.left > 0:
+                self.left -= 1
+                self.calls.append(('user_illusts', 'limited'))
+                return err('Rate Limit')
+        return super().user_illusts(user_id, type=type, offset=offset, **kw)
+
+
+def statuses(db):
+    return dict(db.conn.execute("SELECT task_key, status FROM illusts").fetchall())
+
+
+# ================================================================ 限速
+def test_short_rate_limit_is_waited_out_not_counted_as_failure(cfg, no_sleep, monkeypatch):
+    monkeypatch.setattr(ratelimit, 'BUDGET', 10)            # 预算够用：等一等就过去了
+    api = FlakyAPI(2)
+    api.following['public'] = [(10, 'Alice')]
+    api.users[10] = {'name': 'Alice'}
+    api.illusts[(10, 'illust')] = [make_illust(105)]
+    pro, _ = make_processor(api)
+    pro.sync()
+    db = Database.local(cfg.DB_PATH)
+    assert pro.job.failed == 0 and pro.job.success == 1
+    assert db.sync_failures() == []
+    assert pro.job.result['rate_limit']['main']['trips'] == 2
+    assert any('限速' in line['msg'] for line in pro.job.snapshot()['logs'])
+
+
+def test_long_rate_limit_leaves_artists_unchecked_instead_of_failed(cfg, no_sleep):
+    api = api_with({10: ('Alice', [105]), 20: ('Bob', [205]), 30: ('Carol', [305])})
+    for aid in (10, 20, 30):
+        api.errors[('user_illusts', aid)] = err('Rate Limit')
+    pro, _ = make_processor(api)
+    pro.sync()
+    db = Database.local(cfg.DB_PATH)
+    assert pro.job.failed == 0                               # 一位都不算失败
+    assert pro.job.result['unchecked'] == 3
+    assert db.sync_failures() == []
+    limited = [c for c in api.calls if c[0] == 'user_illusts']
+    assert len({c[1] for c in limited}) == 1                 # 第一位就确认账号用不了，没有再去撞后面两位
+
+
+def test_other_accounts_take_over_when_one_is_rate_limited(cfg, no_sleep):
+    good = api_with({10: ('Alice', [105]), 20: ('Bob', [205]), 30: ('Carol', [305])})
+    bad = api_with({10: ('Alice', [105]), 20: ('Bob', [205]), 30: ('Carol', [305])})
+    for aid in (10, 20, 30):
+        bad.errors[('user_illusts', aid)] = err('Rate Limit')
+    pro, _ = make_processor(good)
+    pro.clients['backup'] = make_client(bad, name='backup', token='tok-b')
+    cfg.TOKENS['backup'] = {'token': 'tok-b', 'is_valid': True}
+    pro.sync()
+    assert pro.job.success == 3 and pro.job.failed == 0 and pro.job.result['unchecked'] == 0
+    assert pro.job.result['rate_limit']['backup']['exhausted'] is True
+
+
+def test_rate_limited_download_keeps_files_pending_without_using_attempts(cfg, no_sleep):
+    api = api_with({10: ('Alice', [105])})
+    pro, _ = make_processor(api, routes_for(api))
+    pro.sync()
+    api.details[105] = err('Rate Limit')
+    pro.download()
+    db = Database.local(cfg.DB_PATH)
+    row = db.conn.execute("SELECT status, COALESCE(attempts,0) FROM illusts WHERE task_key = '105_0'").fetchone()
+    assert row == (0, 0)                                     # 还是待下载，没有记一次失败
+    assert pro.job.failed == 0 and pro.job.result['unprocessed_groups'] == 1
+
+
+def test_http_429_is_rate_limit_and_does_not_use_attempts(cfg, no_sleep):
+    api = api_with({10: ('Alice', [105])})
+    routes = routes_for(api)
+    routes['https://new.example/img/105_p0.png'] = 429
+    pro, _ = make_processor(api, routes)
+    pro.sync()
+    pro.download()
+    db = Database.local(cfg.DB_PATH)
+    row = db.conn.execute("SELECT status, COALESCE(attempts,0), error_kind FROM illusts WHERE task_key = '105_0'").fetchone()
+    assert row == (-1, 0, 'rate_limit')
+    assert [g['kind'] for g in db.failure_groups()] == ['rate_limit']
+
+
+# ================================================================ 检查失败的记录与处理
+def test_failed_artist_is_recorded_and_cleared_on_success(cfg, no_sleep):
+    api = api_with({10: ('Alice', [105]), 20: ('Bob', [205])})
+    api.errors[('user_illusts', 20)] = err('Internal Server Error')
+    pro, _ = make_processor(api)
+    pro.sync()
+    db = Database.local(cfg.DB_PATH)
+    failures = db.sync_failures()
+    assert [(f['author_id'], f['name'], f['kind'], f['count']) for f in failures] == [(20, 'Bob', 'network', 1)]
+    assert 'Internal Server Error' in failures[0]['error']
+    assert pro.job.snapshot()['detail']['failed']['20']['kind'] == 'network'
+    pro.sync()
+    assert db.sync_failures()[0]['count'] == 2               # 连续失败次数
+    del api.errors[('user_illusts', 20)]
+    calls_before = len(api.calls)
+    pro.sync(scope='failed')                                 # 只重查失败的
+    assert db.sync_failures() == []
+    assert not any(c[0] == 'user_following' for c in api.calls[calls_before:])      # 不用再读关注列表
+    assert {c[1] for c in api.calls[calls_before:] if c[0] == 'user_illusts'} == {20}
+
+
+def test_gone_artists_are_recorded_and_not_retried_every_time(cfg, no_sleep):
+    api = api_with({10: ('Alice', [105])})
+    pro, _ = make_processor(api)
+    db = Database.local(cfg.DB_PATH)
+    db.upsert_artist(30, 'Carol', is_deleted=1)              # 以前标记的，不在关注列表里
+    api.errors[('user_illusts', 30)] = err('Not Found')
+    pro.sync()                                               # 没有确认记录：顺带确认一次
+    assert [f['kind'] for f in db.sync_failures()] == ['gone']
+    assert any(c == ('user_illusts', 30, 'illust', None) for c in api.calls)
+    before = len(api.calls)
+    pro.sync()                                               # 刚确认过：这次不再为它花请求
+    assert not any(c[0] == 'user_illusts' and c[1] == 30 for c in api.calls[before:])
+    del api.errors[('user_illusts', 30)]                     # 账号其实还在
+    api.illusts[(30, 'illust')] = [make_illust(305)]
+    api.users[30] = {'name': 'Carol'}
+    pro.sync(scope='gone')                                   # 单独复核
+    assert db.get_artist_full(30)['is_deleted'] == 0 and db.sync_failures() == []
+
+
+def test_skipped_artists_are_left_alone(cfg, no_sleep):
+    api = api_with({10: ('Alice', [105]), 20: ('Bob', [205])})
+    pro, _ = make_processor(api)
+    pro.sync()
+    db = Database.local(cfg.DB_PATH)
+    assert db.set_sync_skip([20]) == 1
+    before = len(api.calls)
+    pro.sync()
+    assert {c[1] for c in api.calls[before:] if c[0] == 'user_illusts'} == {10}
+    assert [s['author_id'] for s in db.sync_skipped()] == [20]
+    db.set_sync_skip([20], skip=False)
+    assert db.sync_skipped() == []
+
+
+def test_incomplete_following_list_is_reported_and_filled_from_database(cfg, no_sleep):
+    api = api_with({10: ('Alice', [105])})
+    pro, _ = make_processor(api)
+    db = Database.local(cfg.DB_PATH)
+    db.upsert_artist(20, 'Bob', is_followed=1)               # 以前查到过、这次关注列表没读到的
+    api.illusts[(20, 'illust')] = [make_illust(205)]
+    api.errors[('user_following', 'private')] = err('Internal Server Error')
+    pro.sync()
+    assert '私密' in pro.job.result['following_incomplete']
+    assert pro.job.snapshot()['detail']['notes']['following']['name'] == '关注列表没有读全'
+    assert db.get_artist(20)[2] == 205                       # 没读到的那位没有被漏掉
+
+
+def test_scopes_never_stale_and_resume(cfg, no_sleep):
+    api = api_with({10: ('Alice', [105]), 20: ('Bob', [205]), 30: ('Carol', [305])})
+    pro, _ = make_processor(api)
+    db = Database.local(cfg.DB_PATH)
+    for aid, name in ((10, 'Alice'), (20, 'Bob'), (30, 'Carol')):
+        db.upsert_artist(aid, name, is_followed=1)
+    with db.tx() as c:
+        c.execute("UPDATE artists SET last_sync_time = '2026-01-01 00:00:00' WHERE author_id = 10")
+        c.execute("UPDATE artists SET last_sync_time = '2099-01-01 00:00:00' WHERE author_id = 20")
+
+    def checked(**kw):
+        before = len(api.calls)
+        pro.sync(**kw)
+        return list(dict.fromkeys(c[1] for c in api.calls[before:] if c[0] == 'user_illusts'))
+
+    assert checked(scope='never') == [30]
+    with db.tx() as c:
+        c.execute("UPDATE artists SET last_sync_time = NULL WHERE author_id = 30")
+        c.execute("UPDATE artists SET last_sync_time = '2026-01-01 00:00:00' WHERE author_id = 10")
+    assert checked(scope='stale', stale_days=7) == [30, 10]  # 从没查过的在前，然后是最久没查的
+    with db.tx() as c:
+        c.execute("UPDATE artists SET last_sync_time = '2026-01-01 00:00:00' WHERE author_id = 10")
+        c.execute("UPDATE artists SET last_sync_time = '2099-01-01 00:00:00' WHERE author_id IN (20, 30)")
+    assert checked(resume_since='2050-01-01 00:00:00') == [10]      # 接着上次没查完的
+
+
+def test_types_keep_separate_progress_and_old_works_are_marked(cfg, no_sleep):
+    api = api_with({10: ('Alice', [105, 104])})
+    pro, _ = make_processor(api)
+    pro.sync()
+    db = Database.local(cfg.DB_PATH)
+    assert db.get_artist_marks(10) == {'illust': 105, 'manga': 0}     # 新画师：两种类型各记各的
+    # 模拟旧版本留下的数据：只有一个共用的进度，漫画没有单独记过
+    with db.tx() as c:
+        c.execute("UPDATE artists SET wm_illust = NULL, wm_manga = NULL WHERE author_id = 10")
+    assert db.get_artist_marks(10) == {'illust': 105, 'manga': 105}
+    # 之后出现了漫画：两个比进度旧，一个比进度新
+    api.illusts[(10, 'manga')] = [make_illust(110, type='manga', pages=2), make_illust(90, type='manga'), make_illust(80, type='manga')]
+    pro.sync()
+    origin = dict(db.conn.execute("SELECT task_key, origin FROM illusts").fetchall())
+    assert origin['110_0'] == 'new' and origin['90_0'] == 'old' and origin['80_0'] == 'old'
+    assert pro.job.result['new_files'] == 4 and pro.job.result['old_files'] == 2
+    assert db.get_artist_marks(10) == {'illust': 105, 'manga': 110}
+
+
+def test_backfill_scans_one_type_from_the_start(cfg, no_sleep, monkeypatch):
+    monkeypatch.setattr(cfg, 'METADATA_REFRESH_LIMIT', 0)    # 不回看：平时一个旧作品都不会补
+    api = api_with({10: ('Alice', [105])})
+    pro, _ = make_processor(api)
+    pro.sync()
+    db = Database.local(cfg.DB_PATH)
+    with db.tx() as c:                                       # 旧版本留下的数据：漫画没有单独的进度
+        c.execute("UPDATE artists SET wm_illust = NULL, wm_manga = NULL WHERE author_id = 10")
+    api.illusts[(10, 'manga')] = [make_illust(m, type='manga') for m in (90, 80, 70, 60)]
+    pro.sync()
+    assert db.conn.execute("SELECT COUNT(*) FROM illusts").fetchone()[0] == 1
+    pro.sync(backfill=['manga'])
+    assert db.conn.execute("SELECT COUNT(*) FROM illusts WHERE origin = 'old'").fetchone()[0] == 4
+
+
+# ================================================================ 待下载：筛选、汇总、不下载
+@pytest.fixture
+def stocked(cfg, no_sleep):
+    api = api_with({10: ('Alice', [105, 104, 103]), 20: ('Bob', [205])})
+    api.illusts[(10, 'manga')] = [make_illust(120, type='manga', pages=3)]
+    api.illusts[(20, 'illust')][0]['x_restrict'] = 1
+    api.illusts[(20, 'illust')][0]['create_date'] = '2025-06-01T00:00:00+09:00'
+    pro, _ = make_processor(api, routes_for(api))
+    pro.sync()
+    return pro, api, Database.local(cfg.DB_PATH)
+
+
+def keys(rows):
+    return sorted(r[0] for r in rows)
+
+
+def test_pending_filters(stocked):
+    pro, api, db = stocked
+    assert len(db.get_pending_tasks()) == 7
+    assert keys(db.get_pending_tasks(filters={'types': ['manga']})) == ['120_0', '120_1', '120_2']
+    assert keys(db.get_pending_tasks(filters={'types': ['illust'], 'exclude_author_ids': [20]})) == ['103_0', '104_0', '105_0']
+    assert keys(db.get_pending_tasks(filters={'exclude_r18': True, 'types': ['illust']})) == ['103_0', '104_0', '105_0']
+    assert keys(db.get_pending_tasks(filters={'date_to': '2025-12-31'})) == ['205_0']
+    assert keys(db.get_pending_tasks(filters={'date_from': '2026-01-01', 'author_ids': [20]})) == []
+    assert keys(db.get_pending_tasks(filters={'keys': ['104_0', '205_0']})) == ['104_0', '205_0']
+    # 每位画师最多 2 个文件：取最新的作品，但同一个作品的各页不拆开
+    assert keys(db.get_pending_tasks(filters={'max_per_artist': 2})) == ['120_0', '120_1', '120_2', '205_0']
+
+
+def test_pending_summary_groups_by_artist(stocked):
+    pro, api, db = stocked
+    data = db.pending_summary()
+    assert data['totals']['files'] == 7 and data['totals']['works'] == 5 and data['totals']['artists'] == 2
+    alice, bob = data['artists']
+    assert (alice['name'], alice['files'], alice['works'], alice['illust'], alice['manga']) == ('Alice', 6, 4, 3, 3)
+    assert (bob['files'], bob['r18'], bob['newest'], bob['is_new_artist']) == (1, 1, '2025-06-01', 1)
+    assert alice['est_bytes'] > 0
+    assert db.pending_summary({'types': ['manga']})['totals']['files'] == 3
+
+
+def test_skip_and_restore_pending(stocked):
+    pro, api, db = stocked
+    assert db.skip_tasks({'author_ids': [10], 'types': ['manga']}) == 3
+    assert len(db.get_pending_tasks()) == 4 and db.stats()['skipped'] == 3
+    assert db.pending_summary(status=(-3,))['totals']['files'] == 3
+    pro.download()
+    assert {k: v for k, v in statuses(db).items() if k.startswith('120_')} == {'120_0': -3, '120_1': -3, '120_2': -3}
+    assert sum(1 for v in statuses(db).values() if v == 1) == 4          # 没标“不下载”的都下了
+    pro.sync()                                                            # 再检查一次，不会把它们变回待下载
+    assert db.stats()['skipped'] == 3
+    assert db.skip_tasks({'author_ids': [10]}, restore=True) == 3
+    assert len(db.get_pending_tasks()) == 3
+
+
+def test_download_with_filters_only_takes_matching_files(stocked):
+    pro, api, db = stocked
+    pro.download(filters={'types': ['illust'], 'exclude_author_ids': [20]})
+    done = sorted(k for k, v in statuses(db).items() if v == 1)
+    assert done == ['103_0', '104_0', '105_0']
+    assert len(db.get_pending_tasks()) == 4
+
+
+# ================================================================ 先看再下、马上重试
+def test_sync_download_stops_for_review_when_many_new_files(stocked, cfg):
+    pro, api, db = stocked
+    api.illusts[(10, 'illust')].insert(0, make_illust(130, pages=4))
+    api.details[130] = api.illusts[(10, 'illust')][0]
+    pro.sync_and_download(review_over=3)                     # 新发现 4 个 > 3：先不下
+    assert pro.job.result['needs_review'] is True
+    assert sum(1 for v in statuses(db).values() if v == 1) == 0
+    pro.sync_and_download(review_over=3)                     # 这次没有新发现：直接下
+    assert 'needs_review' not in pro.job.result
+    assert sum(1 for v in statuses(db).values() if v == 1) >= 7
+
+
+def test_retry_now_downloads_only_the_chosen_failures(stocked):
+    pro, api, db = stocked
+    for key in ('103_0', '104_0'):
+        db.mark_failed(key, 'network', 'boom', permanent=True)
+    pro.retry_now(keys=['104_0'])
+    st = statuses(db)
+    assert st['104_0'] == 1 and st['103_0'] == -1            # 只处理选中的那个
+    assert sum(1 for v in st.values() if v == 1) == 1        # 别的待下载没有被顺带下载
+    pro.retry_now(kinds=['network'])
+    assert statuses(db)['103_0'] == 1
+
+
+# ================================================================ 暂停
+def test_pause_holds_workers_and_resume_continues(stocked):
+    pro, api, db = stocked
+    real = pro._process_group
+    seen = []
+
+    def slow(client, wdb, iid, mt, ts, throttle):
+        seen.append(time.time())
+        if len(seen) == 1:
+            interrupt.pause()
+            threading.Timer(0.6, interrupt.resume).start()
+        return real(client, wdb, iid, mt, ts, throttle)
+
+    pro._process_group = slow
+    pro.download()
+    assert sum(1 for v in statuses(db).values() if v == 1) == 7      # 继续之后全部下完
+    assert seen[1] - seen[0] >= 0.5                                   # 暂停期间没有开始下一个
+    assert not interrupt.is_paused()
+
+
+def test_stop_while_paused_ends_the_job(stocked):
+    pro, api, db = stocked
+    real = pro._process_group
+
+    def first_then_pause(client, wdb, iid, mt, ts, throttle):
+        out = real(client, wdb, iid, mt, ts, throttle)
+        interrupt.pause()
+        threading.Timer(0.3, interrupt.set).start()
+        return out
+
+    pro._process_group = first_then_pause
+    pro.download()
+    assert pro.job.status == 'cancelled'
+    assert 0 < sum(1 for v in statuses(db).values() if v == 1) < 7
