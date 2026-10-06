@@ -2,7 +2,6 @@
 import { initToast } from "./util.js";
 import { normalize, applySettings } from "./settings.js";
 import { connect } from "./api.js";
-import { announceUpdate } from "./update.js";
 import { initDownloader } from "./downloader.js";
 import { initWindowControls } from "./winctl.js";
 
@@ -18,7 +17,6 @@ async function boot() {
   initDownloader(ctx);
   initWindowControls(api, ".dhead, .dnav .dt, [data-drag]");
   await ctx.openDownloader("update");
-  announceUpdate(api);
 }
 // 启动失败时把原因显示出来，而不是留一个空白窗口
 boot().catch((e) => {

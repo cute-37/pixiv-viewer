@@ -2,7 +2,6 @@
 // 更新（检查新作品并下载，带进度）、失败处理、账号、保存位置、下载选项、数据。
 // 下载在独立的进程里跑，这里通过 ctx.api.dl(method, path, body, query) 调它的接口。
 import { $, $$, esc, icon, toast, fmtNum, fmtSize } from "./util.js";
-import { mountUpdate } from "./update.js";
 
 // 两组页面：操作（更新、失败处理）在“下载与更新”面板里；设置（账号、保存位置、下载选项、数据）并入软件的“设置”。
 // 独立的下载器程序没有另外的设置窗口，两组都在同一个侧栏里，分成“下载”“设置”两段。
@@ -165,7 +164,6 @@ export function initDownloader(ctx) {
     const active = document.activeElement && box.contains(document.activeElement) ? document.activeElement : null;
     const focusKey = active && (active.dataset.f || active.id), sel = active && active.selectionStart;
     box.innerHTML = { update: pageUpdate, failed: pageFailed, accounts: pageAccounts, storage: pageStorage, options: pageOptions, link: pageLink }[state.page]();
-    const upd = box.querySelector("#upd-box"); if (upd) mountUpdate(ctx, upd, upd.dataset.ver);
     if (keepScroll) sc.scrollTop = top;
     const lb2 = $("#dl-logbox"); if (lb2) lb2.scrollTop = lbStick ? lb2.scrollHeight : lbTop;
     if (focusKey) { const el = box.querySelector(`[data-f="${focusKey}"], #${CSS.escape(focusKey)}`); if (el) { el.focus(); try { el.setSelectionRange(sel, sel); } catch (e) { /* 不是文本框 */ } } }
@@ -529,8 +527,7 @@ export function initDownloader(ctx) {
         : `<p>下载在后台以独立的进程运行，下载再忙也不影响看图，也不占用网络端口；关闭查看器时会处理完当前文件再退出。</p>`}
       <p>不会自动检查更新：只有你点了“开始”才会访问 Pixiv。</p>
       ${i.external ? `<p>如果你还在单独运行原来的下载器，请不要和这里同时使用——两边会读写同一个数据库。</p>` : ""}
-      ${i.version ? `<p>版本 ${esc(i.version)}</p>` : ""}</div></div>
-    ${solo && ctx.api.updateCheck ? `<div class="group"><div class="gh">更新</div><div id="upd-box" data-ver="${esc(i.version || "")}"></div></div>` : ""}`;
+      ${i.version ? `<p>版本 ${esc(i.version)}</p>` : ""}</div></div>`;
   }
 
   // ================= 事件 =================

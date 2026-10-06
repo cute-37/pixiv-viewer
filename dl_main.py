@@ -29,8 +29,6 @@ HOME = Path(os.environ.get("PIXIV_DL_HOME") or (APP_DIR / "data" / ("" if FROZEN
 os.environ["PIXIV_DL_HOME"] = str(HOME)                       # 必须在导入 pixiv_dl 之前
 os.environ.setdefault("PIXIV_VIEWER_DATA_DIR", str(HOME))     # 不让公共模块把日志写到程序文件夹里
 
-from webapp.updater import UpdateApiMixin, Updater, apply_main  # noqa: E402  （只用标准库，不受上面环境变量影响）
-
 PENDING = HOME / "import-pending.json"                        # 上次没能立即导入、留到这次启动时做的文件
 
 BOOT = b'<script>window.__PV_DESKTOP__=true;window.__PV_TOKEN__="";</script>\n<script type="module"'
@@ -65,27 +63,17 @@ class StaticHandler(BaseHTTPRequestHandler):
             pass
 
 
-class DlApi(UpdateApiMixin):
+class DlApi:
     """给界面用的接口。pywebview 会把不以下划线开头的方法暴露给网页。"""
 
     def __init__(self) -> None:
         self._window = None
-        from utils.constants import APP_VERSION, UPDATE_REPO
-        self._updater = Updater("PixivDownloader", APP_VERSION, UPDATE_REPO, proxies=self._download_proxies)
-        self._update_done = self._updater.finish() if FROZEN else None
         self._settings_file = HOME / "ui.json"
         from pixiv_dl.applog import setup_logging
         from pixiv_dl.web import server as srv
         setup_logging(console=False, to_file=True)
         self._srv = srv
         self._app = srv.App()
-
-    def _download_proxies(self) -> dict:
-        try:
-            from pixiv_dl.config import Config
-            return dict(Config.PROXIES or {})
-        except Exception:
-            return {}
 
     # ---- 界面设置（主题、字体等）
     def get_config(self):
@@ -219,9 +207,6 @@ class DlApi(UpdateApiMixin):
 
 
 def main() -> int:
-    if len(sys.argv) >= 3 and sys.argv[1] == "--apply-update":
-        # 更新：这是刚下载好的新版本，被旧版本启动来替换它的文件（见 webapp/updater.py）
-        return apply_main(sys.argv[2:])
     try:
         import webview
     except ImportError:

@@ -4,7 +4,7 @@
 
 发版前先做好这两件事：改 utils/constants.py 的 APP_VERSION；在 CHANGELOG.md 顶部写好这一版的变化。然后：
 
-    python scripts/release.py              # 打包、推送代码、创建 Release（会先列出要做的事并等你确认）
+    python scripts/release.py              # 打包查看器、推送代码、创建 Release（会先列出要做的事并等你确认）
     python scripts/release.py --skip-build # 直接用 dist/ 里已经打好的包
     python scripts/release.py --dry-run    # 只检查和显示，不推送、不发布
 
@@ -38,12 +38,15 @@ def main() -> int:
     parser.add_argument("--skip-build", action="store_true", help="不重新打包，用 dist/ 里现有的")
     parser.add_argument("--dry-run", action="store_true", help="只检查，不推送也不发布")
     parser.add_argument("--yes", action="store_true", help="不询问，直接发布")
+    parser.add_argument("--notes", help="发布页面上的说明；不给就用 CHANGELOG.md 里这一版的内容（软件里“检查更新”时会显示它）")
     args = parser.parse_args()
 
     from utils.constants import APP_VERSION, UPDATE_REPO
     tag = f"v{APP_VERSION}"
     notes = changelog_section(APP_VERSION)
-    packages = [ROOT / "dist" / f"PixivViewer-{APP_VERSION}-win64.zip", ROOT / "dist" / f"PixivDownloader-{APP_VERSION}-win64.zip"]
+    shown = args.notes or notes
+    # 只发布查看器；只有下载功能的小程序（scripts/build_downloader.py）不随版本发布
+    packages = [ROOT / "dist" / f"PixivViewer-{APP_VERSION}-win64.zip"]
 
     problems = []
     if not notes:
@@ -58,7 +61,6 @@ def main() -> int:
 
     if not args.skip_build:
         run([sys.executable, "scripts/build_viewer.py"])
-        run([sys.executable, "scripts/build_downloader.py"])
     missing = [p.name for p in packages if not p.is_file()]
     if missing:
         sys.exit(f"dist/ 里没有 {', '.join(missing)}")
@@ -66,7 +68,7 @@ def main() -> int:
     print(f"\n将要发布 {tag} 到 https://github.com/{UPDATE_REPO}（公开）")
     for package in packages:
         print(f"  {package.name}  {package.stat().st_size / 2**20:.1f} MB")
-    print("更新说明：\n" + "\n".join("  " + line for line in notes.splitlines()))
+    print("发布说明：\n" + "\n".join("  " + line for line in shown.splitlines()))
     if args.dry_run:
         print("\n(--dry-run：到此为止)")
         return 0
@@ -78,7 +80,7 @@ def main() -> int:
     run(["git", "push", "origin", branch])
     notes_file = ROOT / "build" / "release-notes.md"
     notes_file.parent.mkdir(exist_ok=True)
-    notes_file.write_text(notes + "\n", encoding="utf-8")
+    notes_file.write_text(shown + "\n", encoding="utf-8")
     run(["gh", "release", "create", tag, *map(str, packages), "--repo", UPDATE_REPO, "--target", branch,
          "--title", f"{APP_VERSION}", "--notes-file", str(notes_file)])
     print(f"\n已发布：https://github.com/{UPDATE_REPO}/releases/tag/{tag}")

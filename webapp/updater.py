@@ -3,8 +3,8 @@
 """
 软件自身的检查更新、下载、替换
 
-新版本发布在 GitHub Releases（仓库见 utils.constants.UPDATE_REPO），每个版本带两个压缩包：
-PixivViewer-<版本>-win64.zip 和 PixivDownloader-<版本>-win64.zip。
+新版本发布在 GitHub Releases（仓库见 utils.constants.UPDATE_REPO），每个版本带一个压缩包
+PixivViewer-<版本>-win64.zip。
 
 整个过程分三步，每一步都要用户点了才做，不会自己联网：
 
@@ -66,7 +66,7 @@ class Updater:
 
     def __init__(self, app: str, version: str, repo: str, app_dir: Optional[Path] = None,
                  frozen: Optional[bool] = None, proxies: Optional[Callable[[], Dict[str, str]]] = None) -> None:
-        self.app = app                                   # "PixivViewer" / "PixivDownloader"：压缩包和 exe 的名字
+        self.app = app                                   # "PixivViewer"：压缩包、里面的文件夹和 exe 都叫这个名字
         self.version = version
         self.repo = repo
         self.frozen = getattr(sys, "frozen", False) if frozen is None else frozen
@@ -262,7 +262,7 @@ class Updater:
 
 
 class UpdateApiMixin:
-    """给界面用的几个接口。使用它的类要有 self._updater（Updater）和 self._window（pywebview 窗口）。
+    """给界面用的几个接口（查看器的 Api 在用）。使用它的类要有 self._updater（Updater）和 self._window（pywebview 窗口）。
 
     出错时不抛异常，返回 {"ok": False, "error": 原因}，界面直接把原因显示出来。
     """
