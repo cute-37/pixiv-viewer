@@ -1,7 +1,8 @@
 // 下载与更新：查看器内置的 Pixiv 下载功能（后端是项目里的 pixiv_dl 模块）。
 // 更新（检查新作品并下载，带进度）、失败处理、账号、保存位置、下载选项、数据。
 // 下载在独立的进程里跑，这里通过 ctx.api.dl(method, path, body, query) 调它的接口。
-import { $, $$, esc, icon, toast, fmtNum, fmtSize } from "./util.js";
+import { $, $$, esc, icon, toast, fmtNum } from "./util.js";
+import { createTasks } from "./dl_tasks.js";
 
 // 两组页面：操作（更新、失败处理）在“下载与更新”面板里；设置（账号、保存位置、下载选项、数据）并入软件的“设置”。
 // 独立的下载器程序没有另外的设置窗口，两组都在同一个侧栏里，分成“下载”“设置”两段。
@@ -14,12 +15,14 @@ const KIND_LABEL = {
   sync: "检查更新", sync_download: "检查更新并下载", download: "下载", sync_artist: "检查这位画师", download_artist: "下载这位画师的作品",
   sync_download_artist: "更新这位画师", sync_artist_download: "更新这位画师", sync_artists: "检查所选画师", download_artists: "下载所选画师", sync_download_artists: "更新所选画师",
   verify: "核查文件", refresh_profiles: "刷新画师资料", download_avatars: "补全头像", db_vacuum: "压缩数据库", idle: "空闲",
+  retry_now: "重试失败的文件", recheck_gone: "复核已注销的画师",
 };
 const STATUS_LABEL = { running: "进行中", done: "已完成", cancelled: "已停止", error: "出错了" };
 const FAIL_KINDS = {
   deleted: ["作品已删除", "所有账号都找不到这个作品。一般重试没有用，可以忽略；如果是旧版本记下的，可以重试一次重新判断。", true],
   restricted: ["无权查看", "作品还在，但所有账号都看不了：作者限制了可见范围，或账号没有在 Pixiv 的设置里开启 R-18 / 敏感作品的显示。调整账号设置后可以重试。", true],
-  network: ["网络或服务器问题", "通常重试就能恢复；大批量出现可能是被限速，稍后再试。", true],
+  rate_limit: ["被限速", "下载时被 Pixiv 限速。不是文件本身的问题，也不占重试次数，过一会儿重试即可。", true],
+  network: ["网络或服务器问题", "通常重试就能恢复。", true],
   http: ["访问被拒绝 (403)", "下载地址过期或被拦截，重试时会重新获取地址。", true],
   storage: ["保存失败", "请检查磁盘空间或保存位置的连接，然后重试。", true],
   content: ["内容异常", "下载到的内容不完整，重试一般可以解决。", true],
@@ -121,8 +124,9 @@ export function initDownloader(ctx) {
     if (!isOpen()) return;
     $$("[data-dlpage]", scrim).forEach((b) => b.classList.toggle("on", b.dataset.dlpage === page));
     if ($("#dl-title")) $("#dl-title").textContent = PAGES.find((x) => x[0] === page)[1];
+    state.review = null;
     $("#dl-page").innerHTML = `<div class="dl-loading">正在读取…</div>`;
-    load(page);
+    return load(page);
   }
   // 换页：操作页和设置页不在同一个窗口里时，换到对应的窗口
   function go(page) {
@@ -131,12 +135,12 @@ export function initDownloader(ctx) {
     if (!solo && !isSetting(page) && inSettings) return ctx.openDownloader(page);
     if (!solo && inSettings && page !== state.page) return ctx.openSettings("dl-" + page);
     scroller().scrollTop = 0;
-    mount(page);
+    return mount(page);
   }
   async function load(page) {
     try {
       if (page === "update") { await refreshUpdate(); }
-      if (page === "failed") state.failures = await dl("GET", "/api/failures");
+      if (page === "failed") { await tasks.loadFailed(); state.job = state.job || await dl("GET", "/api/job"); }
       if (page === "accounts") state.accounts = (await dl("GET", "/api/accounts")).items;
       if (page === "storage" || page === "options") {
         const r = await dl("GET", "/api/settings");
@@ -167,7 +171,7 @@ export function initDownloader(ctx) {
     if (keepScroll) sc.scrollTop = top;
     const lb2 = $("#dl-logbox"); if (lb2) lb2.scrollTop = lbStick ? lb2.scrollHeight : lbTop;
     if (focusKey) { const el = box.querySelector(`[data-f="${focusKey}"], #${CSS.escape(focusKey)}`); if (el) { el.focus(); try { el.setSelectionRange(sel, sel); } catch (e) { /* 不是文本框 */ } } }
-    const failed = state.plan ? state.plan.failed_total : 0;
+    const failed = state.plan ? (state.plan.failed_total || 0) + (state.plan.sync_failed || 0) : 0;
     const fb = scrim.querySelector('[data-dlbadge="failed"]'); if (fb) fb.textContent = failed ? fmtNum(failed) : "";
   }
 
@@ -257,122 +261,16 @@ export function initDownloader(ctx) {
     if (!artist || !artist.id) return toast("这个文件夹没有对应的 Pixiv 画师，无法更新");
     state.page = "update";
     ctx.openDownloader("update").then(() => {
+      state.review = null;
       state.confirm = { kind: "sync_download_artist", params: { author_id: artist.id }, title: `更新 ${artist.name}`,
         text: `检查 ${artist.name} 有没有新作品，有就下载。只访问这一位画师。` };
       draw();
     });
   };
 
-  // ================= 更新 =================
-  function pageUpdate() {
-    const job = state.job || {}, plan = state.plan || {};
-    const running = job.running || job.status === "running";
-    const showResult = !running && job.kind && job.kind !== "idle" && state.dismissed !== job.id;
-    let html = state.notes.map((n) => `<div class="dl-note lv-${n.level}">${icon(n.level === "info" ? "info" : "warn")}<div><b>${esc(n.title)}</b>${n.detail ? `<small>${esc(n.detail)}</small>` : ""}</div>
-      ${n.action ? `<button class="btn" data-dlgo="${n.action.route.includes("accounts") ? "accounts" : n.action.route.includes("tasks") ? "failed" : "update"}">${esc(n.action.label)}</button>` : ""}</div>`).join("");
-    if (running) html += runningCard(job);
-    else if (state.confirm) html += confirmCard(state.confirm, plan);
-    else if (showResult) html += resultCard(job);
-    else html += planCard(plan);
-    if (!running && state.runs.length) {
-      html += `<div class="group"><div class="gh">最近的任务</div>${state.runs.map((r) => `<div class="set dl-run"><div class="t">${esc(KIND_LABEL[r.kind] || r.kind)}<small>${fmtWhen(r.finished || r.started)}${r.success ? ` · 下载 ${fmtNum(r.success)} 个` : ""}${r.failed ? ` · 失败 ${fmtNum(r.failed)} 个` : ""}</small></div>
-        <div class="ctl"><span class="dl-tag ${r.status}">${STATUS_LABEL[r.status] || r.status}</span></div></div>`).join("")}</div>`;
-    }
-    return html;
-  }
-  function planCard(plan) {
-    const noAccount = !plan.accounts_valid;
-    return `<div class="group dl-plan">
-      <div class="dl-stats">
-        <div><b>${fmtWhen(plan.last_sync)}</b><span>上次检查更新</span></div>
-        <div><b>${fmtNum(plan.artists || 0)}</b><span>位关注的画师</span></div>
-        <div><b>${fmtNum(plan.pending || 0)}</b><span>个文件待下载${plan.estimated_bytes ? ` · 约 ${fmtSize(plan.estimated_bytes)}` : ""}</span></div>
-      </div>
-      <div class="dl-actions">
-        <button class="btn primary big" data-dl="ask" data-kind="sync_download" ${noAccount ? "disabled" : ""}>${icon("sync")}检查更新并下载</button>
-        <button class="btn" data-dl="ask" data-kind="download" ${noAccount || !plan.pending ? "disabled" : ""}>只下载待下载的</button>
-        <button class="btn" data-dl="ask" data-kind="sync" ${noAccount ? "disabled" : ""}>只检查，不下载</button>
-      </div>
-      <p class="dl-hint">${noAccount ? "还没有可用的 Pixiv 账号，请先到“账号”页添加。" : "点击后会先告诉你要做什么，确认了才开始。不会在后台自动运行。"}</p>
-    </div>`;
-  }
-  function confirmCard(c, plan) {
-    const text = c.text || {
-      sync_download: `检查 ${fmtNum(plan.artists || 0)} 位画师有没有新作品，然后下载新作品${plan.pending ? `和现有的 ${fmtNum(plan.pending)} 个待下载文件` : ""}。`,
-      download: `下载现有的 ${fmtNum(plan.pending || 0)} 个待下载文件${plan.estimated_bytes ? `（约 ${fmtSize(plan.estimated_bytes)}）` : ""}，不检查新作品。`,
-      sync: `检查 ${fmtNum(plan.artists || 0)} 位画师有没有新作品，只记录、不下载。`,
-    }[c.kind];
-    const deepable = c.kind === "sync_download" || c.kind === "sync";
-    return `<div class="group dl-confirm">
-      <div class="dl-confirm-t">${icon("sync")}<b>${esc(c.title || KIND_LABEL[c.kind])}</b></div>
-      <p>${esc(text)}</p>
-      <p class="dl-hint">期间会按“下载选项”里的间隔访问 Pixiv，可以随时停止。${plan.accounts_valid ? `将使用 ${plan.accounts_valid} 个账号。` : ""}</p>
-      ${deepable ? `<label class="dl-check"><input type="checkbox" id="dl-deep" ${c.deep ? "checked" : ""}> 全量检查：重新扫描每位画师的全部作品（很慢，一般不需要）</label>` : ""}
-      <div class="dl-actions"><button class="btn primary" data-dl="start">开始</button><button class="btn ghost" data-dl="cancel-ask">取消</button></div>
-    </div>`;
-  }
-  function runningCard(job) {
-    const pct = job.total ? Math.min(100, (job.done / job.total) * 100) : 0;
-    const sp = state.speed, left = job.total - job.done;
-    const eta = sp.ips > 0.01 && left > 0 ? fmtDur(left / sp.ips) : "";
-    const workers = (job.workers || []).filter((w) => w.text || w.state);
-    const logs = (job.logs || []).slice(-3);
-    return `<div class="group dl-run-card">
-      <div class="dl-run-head"><span class="dl-spin"></span><b>${esc(KIND_LABEL[job.kind] || job.kind)}</b><span class="dl-phase">${esc(job.phase || "")}</span>
-        <span class="sp"></span><button class="btn" data-dl="stop" ${job.stopping ? "disabled" : ""}>${job.stopping ? "正在停止…" : "停止"}</button></div>
-      <div class="dl-bar ${job.total ? "" : "indet"}"><i style="width:${pct}%"></i></div>
-      <div class="dl-nums">
-        <span><b>${fmtNum(job.done)}</b>${job.total ? ` / ${fmtNum(job.total)}` : ""}</span>
-        ${job.success ? `<span>成功 ${fmtNum(job.success)}</span>` : ""}${job.skipped ? `<span>跳过 ${fmtNum(job.skipped)}</span>` : ""}${job.failed ? `<span class="bad">失败 ${fmtNum(job.failed)}</span>` : ""}
-        ${job.bytes ? `<span>${fmtSize(job.bytes)}</span>` : ""}${sp.bps > 1024 ? `<span>${fmtSize(sp.bps)}/s</span>` : ""}
-        <span class="sp"></span><span>已用 ${fmtDur(job.elapsed || 0)}${eta ? ` · 约剩 ${eta}` : ""}</span>
-      </div>
-      ${job.message ? `<p class="dl-hint">${esc(job.message)}</p>` : ""}
-      ${workers.length ? `<div class="dl-workers">${workers.map((w) => `<div><span class="nm">${esc(w.name)}</span><span class="tx">${esc(w.text || w.state || "")}</span></div>`).join("")}</div>` : ""}
-      ${state.logsOpen ? logBox() : logs.length ? `<div class="dl-logs">${logs.map((l) => `<div>${esc(l.msg)}</div>`).join("")}</div>` : ""}
-      <button class="linkbtn" data-dl="logs">${state.logsOpen ? "收起日志" : "查看详细日志"}</button>
-    </div>`;
-  }
-  function resultCard(job) {
-    const d = job.detail || {};
-    const list = (group, fmt) => Object.values(d[group] || {}).sort((a, b) => (b.files || b.works || 0) - (a.files || a.works || 0)).slice(0, 14).map(fmt).join("");
-    const got = list("downloaded", (x) => `<span class="dl-chip">${esc(x.name || "?")}<b>${fmtNum(x.files || 0)}</b></span>`);
-    const fresh = list("new", (x) => `<span class="dl-chip">${esc(x.name || "?")}<b>+${fmtNum(x.works || 0)}</b></span>`);
-    const fails = Object.entries(d.fail_kinds || {}).map(([k, v]) => `<span class="dl-chip bad">${esc((FAIL_KINDS[k] || FAIL_KINDS.other)[0])}<b>${fmtNum(v.count || 0)}</b></span>`).join("");
-    const more = (group) => { const n = Object.keys(d[group] || {}).length; return n > 14 ? `<span class="dl-chip more">等 ${n} 位</span>` : ""; };
-    return `<div class="group dl-result ${job.status}">
-      <div class="dl-run-head">${icon(job.status === "done" ? "check" : "warn")}<b>${esc(KIND_LABEL[job.kind] || job.kind)}${STATUS_LABEL[job.status] ? " · " + STATUS_LABEL[job.status] : ""}</b>
-        <span class="sp"></span><span class="dl-phase">用时 ${fmtDur(job.elapsed || 0)}</span></div>
-      ${job.error ? `<p class="dl-err">${esc(job.error)}</p>` : ""}
-      <div class="dl-nums"><span>下载成功 <b>${fmtNum(job.success || 0)}</b></span>${job.skipped ? `<span>跳过 ${fmtNum(job.skipped)}</span>` : ""}${job.failed ? `<span class="bad">失败 ${fmtNum(job.failed)}</span>` : ""}${job.bytes ? `<span>${fmtSize(job.bytes)}</span>` : ""}</div>
-      ${fresh ? `<div class="dl-sec"><span class="lbl">发现新作品</span><div class="dl-chips">${fresh}${more("new")}</div></div>` : ""}
-      ${got ? `<div class="dl-sec"><span class="lbl">已下载</span><div class="dl-chips">${got}${more("downloaded")}</div></div>` : ""}
-      ${fails ? `<div class="dl-sec"><span class="lbl">失败原因</span><div class="dl-chips">${fails}</div></div>` : ""}
-      ${!fresh && !got && !fails && job.status === "done" ? `<p class="dl-hint">没有新的内容。</p>` : ""}
-      ${state.logsOpen ? logBox() : ""}
-      <div class="dl-actions"><button class="btn primary" data-dl="dismiss">好的</button>${job.failed ? `<button class="btn" data-dlgo="failed">处理失败的文件</button>` : ""}
-        <span class="sp"></span><button class="linkbtn" data-dl="logs">${state.logsOpen ? "收起日志" : "查看详细日志"}</button></div>
-    </div>`;
-  }
-
-  // ================= 失败处理 =================
-  function pageFailed() {
-    const f = state.failures || { groups: [], ignored: 0 };
-    if (!f.groups.length) {
-      return `<div class="dl-empty">${icon("check")}<b>没有下载失败的文件</b>${f.ignored ? `<span>有 ${fmtNum(f.ignored)} 个已忽略的文件</span><button class="btn" data-dl="restore">恢复它们，重新尝试</button>` : ""}</div>`;
-    }
-    const total = f.groups.reduce((n, g) => n + g.count, 0);
-    const retryable = f.groups.filter((g) => (FAIL_KINDS[g.kind] || FAIL_KINDS.other)[2]);
-    return `<div class="group"><div class="set"><div class="t">共 ${fmtNum(total)} 个文件下载失败<small>按原因分组。“重试”只是把它们放回待下载，下次下载时才会真正再试。</small></div>
-        <div class="ctl">${retryable.length ? `<button class="btn primary" data-dl="retry" data-kinds="${esc(retryable.map((g) => g.kind).join(","))}">全部重试</button>` : ""}</div></div></div>
-      <div class="group">${f.groups.map((g) => {
-        const [label, hint, canRetry] = FAIL_KINDS[g.kind] || FAIL_KINDS.other;
-        return `<div class="set dl-fail"><div class="t"><span class="dl-fail-t">${esc(label)}<b>${fmtNum(g.count)}</b></span><small>${esc(hint)}${g.sample ? `<br><span class="mono">${esc(String(g.sample).slice(0, 140))}</span>` : ""}</small></div>
-          <div class="ctl">${canRetry ? `<button class="btn" data-dl="retry" data-kinds="${esc(g.kind)}">重试</button>` : ""}<button class="btn ghost" data-dl="ignore" data-kinds="${esc(g.kind)}">忽略</button>
-          ${g.kind === "auth" ? `<button class="btn ghost" data-dlgo="accounts">去处理账号</button>` : g.kind === "storage" ? `<button class="btn ghost" data-dlgo="storage">检查保存位置</button>` : ""}</div></div>`;
-      }).join("")}</div>
-      ${f.ignored ? `<div class="group"><div class="set"><div class="t">已忽略 ${fmtNum(f.ignored)} 个<small>忽略的文件不会再自动重试，也不计入失败。</small></div><div class="ctl"><button class="btn" data-dl="restore">恢复</button></div></div></div>` : ""}`;
-  }
+  // ================= 更新、失败处理（内容在 dl_tasks.js） =================
+  const tasks = createTasks({ state, dl, guard, draw, go, startJob, onJob, ctx, api, solo, fmtDur, fmtWhen, KIND_LABEL, STATUS_LABEL, FAIL_KINDS, logBox, fetchLogs });
+  const pageUpdate = () => tasks.pageUpdate(), pageFailed = () => tasks.pageFailed();
 
   // ================= 账号 =================
   // 可见性标记：true 看得到，false 看不到，其余是还没测
@@ -466,7 +364,7 @@ export function initDownloader(ctx) {
   }
   const OPTION_KEYS = ["MAIN_ACCOUNT_SYNC_THREADS", "BACKUP_ACCOUNT_SYNC_THREADS", "MAIN_ACCOUNT_DOWNLOAD_THREADS", "BACKUP_ACCOUNT_DOWNLOAD_THREADS", "DELAY_SYNC", "DELAY_DOWNLOAD",
     "FAILURE_RATE_THRESHOLD", "RATE_LIMIT_ENABLED", "MAX_RETRIES", "SYNC_TYPES", "SYNC_NOVELS", "METADATA_REFRESH_LIMIT", "UGOIRA_PREFER_HQ", "UGOIRA_WEBP_LOSSLESS",
-    "PROXY_MODE", "PROXY_URL"];
+    "PROXY_MODE", "PROXY_URL", "REVIEW_THRESHOLD"];
   const PROXY_MODES = [["system", "跟随系统设置"], ["custom", "自定义"], ["none", "不使用代理"]];
   const PROXY_HINTS = {
     system: "使用 Windows 里设置的代理；系统没有设置代理时直接连接。",
@@ -509,6 +407,9 @@ export function initDownloader(ctx) {
         ${row("作品类型", "动图算在插画里", `<div class="seg multi">${[["illust", "插画"], ["manga", "漫画"]].map(([v, l]) => `<button data-dltype="${v}" class="${types.includes(v) ? "on" : ""}">${l}</button>`).join("")}</div>`)}
         ${row("小说", "", sw("SYNC_NOVELS"))}
         ${row("顺带刷新旧作品的数据", "增量检查时，遇到已有作品后再往前刷新多少个（收藏数、标签等）", `${num("METADATA_REFRESH_LIMIT", 0, 1000)}<span>个</span>`)}
+      </div>
+      <div class="group"><div class="gh">检查之后</div>
+        ${row("新发现的文件超过多少先问我", "“检查更新并下载”时，如果这次新发现的文件比这个数多，就先停下来列出是谁的，等你确认后再下载。填 0 表示从不询问。", `${num("REVIEW_THRESHOLD", 0, 1000000)}<span>个</span>`)}
       </div>
       <div class="group"><div class="gh">动图</div>
         ${row("下载最高清的版本", "Pixiv 的动图是一个装着每一帧图片的压缩包，有大（最长边 1920）、小（600）两种。打开 = 下载大的，这就是 Pixiv 能给的原始画质；压缩包会原样保存。", sw("UGOIRA_PREFER_HQ"))}
@@ -581,28 +482,11 @@ export function initDownloader(ctx) {
     }
     const br = t.closest("[data-dlbrowse]");
     if (br) { const [share, path] = br.dataset.dlbrowse.split("|"); return browse(share || "", path ? path.split("/").filter(Boolean) : []); }
+    if (tasks.toggle(t)) return;
     const b = t.closest("[data-dl]"); if (!b || b.disabled) return;
     const act = b.dataset.dl;
     if (act === "reload") return go(state.page);
-    // ---- 更新
-    if (act === "ask") { state.confirm = { kind: b.dataset.kind }; return draw(); }
-    if (act === "cancel-ask") { state.confirm = null; return draw(); }
-    if (act === "start") { const c = state.confirm; return startJob(c.kind, { ...(c.params || {}), deep: !!($("#dl-deep") && $("#dl-deep").checked) }); }
-    if (act === "stop") { await guard(() => dl("POST", "/api/job/stop")); onJob(await dl("GET", "/api/job")); return draw(); }
-    if (act === "logs") { state.logsOpen = !state.logsOpen; if (state.logsOpen) await fetchLogs(); return draw(); }
-    if (act === "dismiss") { state.dismissed = state.job.id; return draw(); }
-    // ---- 失败
-    if (act === "retry" || act === "ignore") {
-      const kinds = b.dataset.kinds.split(",");
-      const r = await guard(() => dl("POST", act === "retry" ? "/api/tasks/retry" : "/api/tasks/ignore", { kinds }));
-      if (r) toast(act === "retry" ? `已把 ${fmtNum(r.count)} 个文件放回待下载` : `已忽略 ${fmtNum(r.count)} 个文件`);
-      state.plan = null; return go("failed");
-    }
-    if (act === "restore") {
-      const r = await guard(() => dl("POST", "/api/tasks/ignore", { kinds: Object.keys(FAIL_KINDS), restore: true }));
-      if (r) toast(`已恢复 ${fmtNum(r.count)} 个文件`);
-      return go("failed");
-    }
+    if (await tasks.click(act, b)) return;
     // ---- 账号
     if (act === "acc-main") { await guard(() => dl("POST", "/api/accounts/main", { name: b.dataset.name }), "已设为主账号"); return go("accounts"); }
     if (act === "acc-del") {
@@ -746,6 +630,7 @@ export function initDownloader(ctx) {
     draw();
   }
   scrim.addEventListener("change", (e) => {
+    if (isOpen() && tasks.change(e)) return;
     if (isOpen() && e.target.matches("[data-dlproxysel]")) { state.form.PROXY_MODE = e.target.value; state.ptest = null; return draw(); }
     if (!isOpen() || !e.target.matches("[data-dlmodesel]")) return;
     state.form.STORAGE_MODE = e.target.value; state.test = null; state.browse = null;

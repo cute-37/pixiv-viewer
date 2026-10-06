@@ -188,6 +188,19 @@ class DlApi(LoginMixin):
             return None
         return result[0] if isinstance(result, (list, tuple)) else result
 
+    def save_text(self, name, text):
+        """让用户选个地方，把一段文字存成文件（导出清单用）。返回保存的路径；取消了返回空字符串。"""
+        import webview
+        if not self._window:
+            return ""
+        picked = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=str(name or "导出.txt"))
+        if not picked:
+            return ""
+        path = picked if isinstance(picked, str) else picked[0]
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+            f.write(str(text or ""))
+        return path
+
     def open_url(self, url):
         if not str(url).startswith(("https://", "http://")):
             return False

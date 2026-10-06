@@ -222,6 +222,7 @@ export const mock = {
   async removeFolder() { return true; },
   async reveal() { return "preview"; },
   async openExternal() { return "preview"; },
+  async saveText(name) { return "D:\\导出\\" + name; },
   async clearCache() { const freed = mockCacheSize; mockCacheSize = 0; return { removed: 4321, freed }; },
   // 登录窗口：预览版里假装过几秒登录成功
   async loginStart() { mockLogin = { status: "waiting", at: Date.now() }; return { ok: true, status: "waiting" }; },
@@ -255,7 +256,7 @@ function mockDownloader() {
     STORAGE_MODE: "smb", LOCAL_SAVE_PATH: "D:\\Pixiv", NAS_IP: "192.168.1.100", NAS_USER: "pixiv", NAS_PASS_SET: true, NAS_SHARE: "media", NAS_BASE_PATH: "插画/PIXIV", NAS_REMOTE_NAME: "",
     WEBDAV_URL: "", WEBDAV_USER: "", WEBDAV_PASS_SET: false, WEBDAV_VERIFY_TLS: true, FTP_URL: "", FTP_USER: "", FTP_PASS_SET: false, SFTP_URL: "", SFTP_USER: "", SFTP_PASS_SET: false, SFTP_KEY_FILE: "",
     S3_ENDPOINT: "", S3_REGION: "", S3_BUCKET: "", S3_PREFIX: "", S3_ACCESS_KEY: "", S3_SECRET_KEY_SET: false, S3_PATH_STYLE: false, S3_VERIFY_TLS: true,
-    PROXY_MODE: "system", PROXY_URL: "",
+    PROXY_MODE: "system", PROXY_URL: "", REVIEW_THRESHOLD: 2000,
     MAIN_ACCOUNT_SYNC_THREADS: 1, BACKUP_ACCOUNT_SYNC_THREADS: 1, MAIN_ACCOUNT_DOWNLOAD_THREADS: 1, BACKUP_ACCOUNT_DOWNLOAD_THREADS: 2, DELAY_SYNC: [1.5, 3], DELAY_DOWNLOAD: [0.8, 2],
     FAILURE_RATE_THRESHOLD: 0.5, RATE_LIMIT_ENABLED: true, MAX_RETRIES: 3, SYNC_TYPES: ["illust", "manga"], SYNC_NOVELS: true, METADATA_REFRESH_LIMIT: 20, UGOIRA_PREFER_HQ: true, UGOIRA_WEBP_LOSSLESS: true,
   };
@@ -264,7 +265,22 @@ function mockDownloader() {
     { name: "backup", username: "备用", user_id: 7654321, remark: "小号", is_valid: true, last_tested: "2026-10-02 21:10:00", is_main: false, token_hint: "efgh…stuv", r18: false, r18g: false },
   ];
   let failures = [{ kind: "deleted", count: 12, auto_retry: 0, sample: "作品不存在或已被删除" }, { kind: "network", count: 5, auto_retry: 5, sample: "ReadTimeout: i.pximg.net" }];
-  let ignored = 3, pending = 37, linked = false;
+  let ignored = 3, linked = false;
+  // 待下载：按画师分的示例数据（“先看再下”用）
+  const mk = (i, files, extra) => ({ author_id: +ARTISTS[i].id, name: ARTISTS[i].name, files, works: Math.ceil(files / 3), illust: files, manga: 0, ugoira: 0, novel: 0, old: 0, r18: 0,
+    est_bytes: files * 3.4e6, newest: "2026-10-01", is_new_artist: 0, ...(extra || {}) });
+  let queue = [mk(0, 14), mk(1, 9, { manga: 4, illust: 5, old: 4 }), mk(2, 8, { is_new_artist: 1 }), mk(3, 4, { ugoira: 1, illust: 3 }), mk(4, 2)];
+  let skippedQueue = [];
+  const pendingTotal = () => queue.reduce((n, a) => n + a.files, 0);
+  let syncFails = [
+    { author_id: +ARTISTS[5].id, name: ARTISTS[5].name, kind: "rate_limit", error: "获取 illust 作品列表失败: Rate Limit", time: "2026-10-06 19:20:11", count: 1, gone: 0 },
+    { author_id: +ARTISTS[6].id, name: ARTISTS[6].name, kind: "network", error: "获取 manga 作品列表失败: Internal Server Error", time: "2026-10-06 19:21:40", count: 2, gone: 0 },
+    { author_id: 90000001, name: "已经不在的画师", kind: "gone", error: "账号已注销或不存在", time: "2026-10-01 10:00:00", count: 3, gone: 1 },
+  ];
+  let syncSkipped = [];
+  const failedTasks = (kind) => Array.from({ length: (failures.find((g) => g.kind === kind) || { count: 0 }).count }, (_, i) => ({
+    task_key: `${131000000 + i}_0`, illust_id: 131000000 + i, page_index: 0, media_type: "image", status: -1, attempts: kind === "deleted" ? 3 : 1, last_error: (failures.find((g) => g.kind === kind) || {}).sample,
+    error_kind: kind, author_id: +ARTISTS[i % ARTISTS.length].id, author_name: ARTISTS[i % ARTISTS.length].name, title: `示例作品 ${i + 1}` }));
   const imported = new Set(["works_db"]);
   const runs = [{ id: 1, kind: "sync_download", status: "done", started: now() - 86400 * 2, finished: now() - 86400 * 2 + 300, success: 64, failed: 0 }];
   let job = { id: "idle0", kind: "idle", status: "idle", running: false, total: 0, done: 0, success: 0, failed: 0, skipped: 0, bytes: 0, phase: "", message: "", detail: {}, workers: [], logs: [], elapsed: 0 };
@@ -276,23 +292,30 @@ function mockDownloader() {
     Object.assign(job, { status, running: false, finished: now(), workers: [] });
     runs.unshift({ id: runs.length + 1, kind: job.kind, status, started: job.started, finished: job.finished, success: job.success, failed: job.failed });
   }
-  function run(kind) {
-    const sync = kind.startsWith("sync"), one = kind.endsWith("_artist");
-    const files = one ? 6 : sync ? 40 : pending;
+  function run(kind, body = {}) {
+    const sync = kind.startsWith("sync") || kind === "recheck_gone", one = kind.endsWith("_artist") || kind === "retry_now";
+    const only = body.author_ids ? new Set(body.author_ids) : null;
+    const files = one ? 6 : sync ? 40 : queue.filter((a) => !only || only.has(a.author_id)).reduce((n, a) => n + a.files, 0);
+    const review = kind === "sync_download" && body.review !== "never";
     job = { id: "j" + Math.round(now()), kind, status: "running", running: true, total: sync ? (one ? 1 : ARTISTS.length) : files, done: 0, success: 0, failed: 0, skipped: 0, bytes: 0,
       phase: sync ? "同步" : "下载", message: "", detail: {}, workers: [{ name: "main", text: "" }, { name: "backup", text: "" }], logs: [], elapsed: 0, started: now(), stopping: false };
     let stage = sync ? "sync" : "download";
     clearInterval(timer);
     timer = setInterval(() => {
+      if (job.stopping) return finish("cancelled");
+      if (job.paused) return;
       job.elapsed = now() - job.started;
       const who = names[Math.floor(Math.random() * names.length)];
-      if (job.stopping) return finish("cancelled");
       if (stage === "sync") {
         job.done++; job.workers[0].text = `检查 ${who}`;
         if (Math.random() < 0.5) bump("new", who, (x) => ({ name: who, works: (x.works || 0) + 1 + Math.floor(Math.random() * 3) }));
         job.logs.push({ t: now(), msg: `[同步] ${who} 完成` });
         if (job.done >= job.total) {
-          if (kind.includes("download")) { stage = "download"; job.phase = "下载"; job.total = files; job.done = 0; } else finish("done");
+          job.result = { artists: job.total, artists_ok: job.total - 1, artists_failed: 1, new_files: pendingTotal(), old_files: 4, unchecked: 0, following_incomplete: "" };
+          job.detail.failed = { [syncFails[0] ? syncFails[0].author_id : 1]: { name: (syncFails[0] || {}).name || "示例画师", note: "获取 illust 作品列表失败: Rate Limit", kind: "rate_limit" } };
+          job.success = job.total - 1; job.failed = 1;
+          if (review) { job.result.needs_review = true; finish("done"); }
+          else if (kind.includes("download")) { stage = "download"; job.phase = "下载"; job.total = files; job.done = 0; job.success = 0; job.failed = 0; } else finish("done");
         }
         return;
       }
@@ -305,7 +328,7 @@ function mockDownloader() {
       }
       job.workers[1].text = `下载 ${who} 的作品`;
       job.logs.push({ t: now(), msg: `[下载] ${who} · 第 ${job.done} 个` });
-      if (job.done >= job.total) { pending = 0; finish("done"); }
+      if (job.done >= job.total) { job.result = { ...(job.result || {}), tasks: job.total }; queue = queue.filter((a) => only && !only.has(a.author_id)); finish("done"); }
     }, 450);
   }
   const ok = (data) => ({ ok: true, data }), err = (status, error) => ({ ok: false, status, error });
@@ -350,9 +373,42 @@ function mockDownloader() {
       await wait(120);
       body = body || {};
       if (path === "/api/job" && method === "GET") return ok({ ...job, logs: job.logs.slice(-60) });
-      if (path === "/api/job" && method === "POST") { if (job.running) return err(409, "已有任务在运行，请先等待完成或点击「停止」"); run(body.kind); return ok({ ok: true }); }
+      if (path === "/api/job" && method === "POST") { if (job.running) return err(409, "已有任务在运行，请先等待完成或点击「停止」"); run(body.kind, body); return ok({ ok: true }); }
+      if (path === "/api/job/pause") { job.paused = true; job.message = "已暂停"; return ok({ ok: true, paused: true }); }
+      if (path === "/api/job/resume") { job.paused = false; job.message = ""; return ok({ ok: true, resumed: true }); }
+      if (path === "/api/pending/summary") {
+        const src = body.skipped ? skippedQueue : queue, f = body.filters || {};
+        const list = src.filter((a) => !f.types || f.types.some((t) => a[t] > 0)).filter((a) => !f.origin || (f.origin === "old" ? a.old > 0 : a.files > a.old));
+        const sum = (k) => list.reduce((n, a) => n + a[k], 0);
+        return ok({ artists: list.map((a) => ({ ...a })), totals: { files: sum("files"), works: sum("works"), est_bytes: sum("est_bytes"), artists: list.length }, skipped_total: skippedQueue.reduce((n, a) => n + a.files, 0) });
+      }
+      if (path === "/api/pending/skip") {
+        const ids = new Set((body.filters || {}).author_ids || []);
+        const from = body.restore ? skippedQueue : queue, moved = from.filter((a) => ids.has(a.author_id));
+        if (body.restore) { skippedQueue = skippedQueue.filter((a) => !ids.has(a.author_id)); queue = queue.concat(moved); }
+        else { queue = queue.filter((a) => !ids.has(a.author_id)); skippedQueue = skippedQueue.concat(moved); }
+        return ok({ ok: true, count: moved.reduce((n, a) => n + a.files, 0) });
+      }
+      if (path === "/api/sync/failures") {
+        const order = ["rate_limit", "network", "auth", "other", "gone"];
+        return ok({ groups: order.filter((k) => syncFails.some((x) => x.kind === k)).map((k) => ({ kind: k, count: syncFails.filter((x) => x.kind === k).length, items: syncFails.filter((x) => x.kind === k) })),
+          total: syncFails.length, skipped: syncSkipped });
+      }
+      if (path === "/api/sync/skip") {
+        const ids = new Set(body.author_ids || []);
+        if (body.restore) { syncSkipped = syncSkipped.filter((x) => !ids.has(x.author_id)); }
+        else { syncSkipped = syncSkipped.concat(syncFails.filter((x) => ids.has(x.author_id))); syncFails = syncFails.filter((x) => !ids.has(x.author_id)); }
+        return ok({ ok: true, count: ids.size });
+      }
+      if (path === "/api/tasks" && method === "GET") {
+        const q = arguments[3] || {}, all = q.status === "ignored" ? Array.from({ length: ignored }, (_, i) => ({ ...failedTasks("deleted")[0], task_key: `ign${i}_0`, title: `已忽略的作品 ${i + 1}`, status: -2 })) : failedTasks(q.kind);
+        const page = +q.page || 1;
+        return ok({ items: all.slice((page - 1) * 50, page * 50), total: all.length, page, per: 50 });
+      }
+      if (path === "/api/failures/export") return ok({ csv: "task_key,illust_id\n", count: failedTotal() });
       if (path === "/api/job/stop") { job.stopping = true; job.message = "正在停止，等待当前文件处理完…"; return ok({ ok: true }); }
-      if (path === "/api/plan") return ok({ pending, estimated_bytes: pending * 3.4e6, exhausted: 0, last_sync: "2026-10-02 21:16:44", artists: ARTISTS.length, accounts_valid: accounts.filter((a) => a.is_valid).length, main_account: "main", failed_total: failedTotal(), running: job.running });
+      if (path === "/api/plan") return ok({ skipped_total: skippedQueue.reduce((n, a) => n + a.files, 0), review_threshold: settings.REVIEW_THRESHOLD, sync_failed: syncFails.filter((x) => !x.gone).length,
+        resume: null, pending: pendingTotal(), estimated_bytes: pendingTotal() * 3.4e6, exhausted: 0, last_sync: "2026-10-02 21:16:44", artists: ARTISTS.length, accounts_valid: accounts.filter((a) => a.is_valid).length, main_account: "main", failed_total: failedTotal(), running: job.running });
       if (path === "/api/notifications") return ok({ items: failures.length ? [{ id: "f", level: "info", title: `有 ${failedTotal()} 个文件下载失败`, detail: "其中一部分可以重试，其余多半是作品已被删除。", action: { label: "去处理", route: "#/tasks?tab=failed" } }] : [] });
       if (path === "/api/runs") return ok({ items: runs.slice(0, 5) });
       if (path === "/api/logs") return ok({ items: job.logs.map((l, i) => ({ id: i + 1, t: l.t, level: l.msg.includes("失败") ? "WARNING" : "INFO", msg: l.msg })).filter((l) => l.id > +((arguments[3] || {}).since || 0)) });
@@ -360,7 +416,7 @@ function mockDownloader() {
       if (path === "/api/tasks/retry" || (path === "/api/tasks/ignore" && !body.restore)) {
         const n = failures.filter((g) => body.kinds.includes(g.kind)).reduce((s, g) => s + g.count, 0);
         failures = failures.filter((g) => !body.kinds.includes(g.kind));
-        if (path.endsWith("retry")) pending += n; else ignored += n;
+        if (!path.endsWith("retry")) ignored += n;
         return ok({ ok: true, count: n });
       }
       if (path === "/api/tasks/ignore") { const n = ignored; ignored = 0; if (n) failures.push({ kind: "deleted", count: n, auto_retry: 0, sample: "" }); return ok({ ok: true, count: n }); }

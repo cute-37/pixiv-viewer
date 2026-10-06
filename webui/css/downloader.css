@@ -152,3 +152,47 @@
 .group > .dl-test { margin: 0 calc(var(--gap) * 1.5) var(--gap); padding: calc(var(--gap) * .75) var(--gap); border-radius: var(--radius); background: var(--sunken); }
 .group > .dl-test .gh { padding: 0 0 4px; }
 .group > .dl-test .gh small { font-weight: 400; color: var(--text-3); }
+/* ================= 更新页：提示行、任务选项、先看再下 ================= */
+.dl-hintrow { display: flex; align-items: center; gap: var(--gap); margin: 0 calc(var(--gap) * 1.5) var(--gap); padding: calc(var(--gap) * .75) var(--gap); border-radius: var(--radius); background: var(--sunken); color: var(--text-2); line-height: 1.5; }
+.dl-hintrow > span { flex: 1; min-width: 0; }
+.dl-hintrow > svg { flex: none; width: 15px; height: 15px; color: var(--text-3); }
+.dl-hintrow b { color: var(--text); }
+.dl-hintrow.strong { background: var(--accent-soft); color: var(--text); }
+.dl-hintrow.strong > svg { color: var(--accent); }
+.dl-more { margin: 0 calc(var(--gap) * 1.5) var(--gap); }
+.dl-opts { margin: 0 calc(var(--gap) * 1.5) var(--gap); border: 1px solid var(--line); border-radius: var(--radius); }
+.dl-opts .gh { padding: var(--gap) calc(var(--gap) * 1.5) 2px; }
+.dl-opts .set input[type=number] { width: 84px; }
+.dl-opts .set input[type=date] { height: calc(var(--ctl) - 2px); border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); color: var(--text); padding: 0 6px; font: inherit; }
+.dl-run-card.paused .dl-spin { animation-play-state: paused; opacity: .45; }
+.dl-run-card.paused .dl-bar i { background: var(--text-3); }
+.dl-rv-filters { display: flex; align-items: center; gap: var(--gap); flex-wrap: wrap; padding: 0 calc(var(--gap) * 1.5) var(--gap); }
+.dl-rv-filters .sp, .dl-actions .sp { flex: 1; }
+.dl-rv-list { margin: 0 calc(var(--gap) * 1.5); max-height: 44vh; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.dl-rv-row { display: flex; align-items: center; gap: var(--gap); padding: 6px var(--gap); cursor: pointer; }
+.dl-rv-row + .dl-rv-row { border-top: 1px solid var(--line); }
+.dl-rv-row:hover { background: var(--sunken); }
+.dl-rv-row.off { color: var(--text-3); }
+.dl-rv-row.off .nm { text-decoration: line-through; }
+.dl-rv-row input { accent-color: var(--accent); flex: none; }
+.dl-rv-row .nm { flex: none; max-width: 34%; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-rv-row .tg { flex: 1; min-width: 0; display: flex; gap: 4px; flex-wrap: wrap; }
+.dl-rv-row .n { flex: none; min-width: 78px; text-align: right; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dl-rv-row .n b { color: var(--text); }
+.dl-rv-row .n.sz { min-width: 92px; color: var(--text-3); }
+.dl-rv-sum { color: var(--text-2); } .dl-rv-sum b { color: var(--text); }
+.dl-review .dl-actions { padding-top: var(--gap); }
+/* ================= 失败处理：两栏、逐条列表 ================= */
+.dl-tabs { display: flex; margin-bottom: var(--gap); }
+.dl-tabs .seg .n { margin-left: 6px; color: #e5484d; font-variant-numeric: tabular-nums; }
+.dl-tasklist { margin: 0 calc(var(--gap) * 1.5) var(--gap); border: 1px solid var(--line); border-radius: var(--radius); max-height: 46vh; overflow-y: auto; }
+.dl-task { display: flex; align-items: center; gap: var(--gap); padding: 6px var(--gap); }
+.dl-task + .dl-task { border-top: 1px solid var(--line); }
+.dl-task .t { flex: 1; min-width: 0; }
+.dl-task .t b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.dl-task .by { color: var(--text-3); font-size: calc(var(--fs) - 1.5px); }
+.dl-task small { display: block; color: var(--text-3); font-size: calc(var(--fs) - 2px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-task .ctl { flex: none; display: flex; gap: 4px; }
+.dl-pager { display: flex; align-items: center; justify-content: center; gap: var(--gap); padding: 0 0 var(--gap); color: var(--text-3); }
+.dl-review > p { margin: 0; padding: 0 calc(var(--gap) * 1.5) var(--gap); line-height: 1.55; color: var(--text-2); }
+.dl-review .dl-actions { padding-left: calc(var(--gap) * 1.5); padding-right: calc(var(--gap) * 1.5); padding-bottom: var(--gap); }

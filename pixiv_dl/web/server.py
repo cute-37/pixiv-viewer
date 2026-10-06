@@ -810,6 +810,18 @@ def api_failures(r):
     return {"groups": db.failure_groups(Config.MAX_ATTEMPTS), "ignored": db.stats()["ignored"]}
 
 
+@route("GET", r"/api/failures/export")
+def api_failures_export(r):
+    """失败清单（CSV 文本）。界面拿到后让用户选地方保存。"""
+    rows = r.app.db.get_failed_tasks()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(['task_key', 'illust_id', 'page_index', 'author_id', 'title', 'url', 'media_type',
+                'create_date', 'tags', 'page_count', 'attempts', 'updated_at'])
+    w.writerows(rows)
+    return {"csv": buf.getvalue(), "count": len(rows)}
+
+
 def _keys(body):
     keys = body.get("keys")
     if keys is not None and (not isinstance(keys, list) or not all(isinstance(k, str) for k in keys)):

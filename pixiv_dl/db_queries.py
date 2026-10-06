@@ -144,14 +144,16 @@ class QueryMixin:
             a['r18'] += r18 or 0
             a['est_bytes'] += int(files * (avg.get(media) or (2000 if media == 'novel' else default)))
             a['newest'] = max(a['newest'], newest or '')
-        info = {r[0]: r for r in self.conn.execute(
-            "SELECT a.author_id, a.author_name, a.is_followed, "
-            "(SELECT COUNT(*) FROM illusts i2 JOIN illust_metadata m2 ON m2.illust_id = i2.illust_id "
-            " WHERE m2.author_id = a.author_id AND i2.status = 1) FROM artists a")} if artists else {}
+        names, has_done = {}, set()
+        if artists:
+            names = dict(self.conn.execute("SELECT author_id, author_name FROM artists").fetchall())
+            # 哪些画师已经有下载好的文件（一次扫完，不要对每位画师各查一遍：十几万条记录时那样要几十秒）
+            has_done = {r[0] for r in self.conn.execute(
+                "SELECT DISTINCT m.author_id FROM illusts i JOIN illust_metadata m ON m.illust_id = i.illust_id "
+                "WHERE i.status = 1")}
         for aid, a in artists.items():
-            row = info.get(aid)
-            a['name'] = (row[1] if row else None) or f"画师 {aid}"
-            a['is_new_artist'] = 0 if (row and row[3]) else 1      # 这位画师还没有任何已下载的文件
+            a['name'] = names.get(aid) or f"画师 {aid}"
+            a['is_new_artist'] = 0 if aid in has_done else 1      # 这位画师还没有任何已下载的文件
         items = sorted(artists.values(), key=lambda a: -a['files'])
         keys = ('files', 'works', 'illust', 'manga', 'ugoira', 'novel', 'old', 'r18', 'est_bytes')
         totals = {k: sum(a[k] for a in items) for k in keys}

@@ -370,3 +370,98 @@ def test_clear_thumbnail_cache_from_settings(page):
     page.click("[data-act=clear-cache]")
     page.wait_for_function("document.querySelector('[data-act=clear-cache]') && document.querySelector('[data-act=clear-cache]').disabled")
     assert "已清空缩略图缓存" in page.locator("#toast-t").inner_text()
+
+
+# ---------------- 下载与更新：任务选项、暂停、先看再下、失败处理 ----------------
+def open_dl(page):
+    page.click("#btn-dl")
+    page.wait_for_selector(".dl-plan")
+
+
+def test_task_options_pause_and_review_flow(page):
+    open_dl(page)
+    page.click("[data-dl=ask][data-kind=sync_download]")
+    page.click("[data-dl=opts]")
+    assert page.locator(".dl-opts [data-opt=scope]").input_value() == "all"
+    page.select_option(".dl-opts [data-opt=scope]", "stale")
+    page.wait_for_selector(".dl-opts [data-opt=staleDays]")
+    page.click(".dl-opts [data-opttype=novel]")                          # 这次不要小说
+    assert "on" not in page.locator(".dl-opts [data-opttype=novel]").get_attribute("class")
+    page.click("[data-dl=start]")
+    page.wait_for_selector("[data-dl=pause]")
+    page.click("[data-dl=pause]")
+    page.wait_for_selector("[data-dl=resume]")
+    assert "已暂停" in page.locator(".dl-run-card").inner_text()
+    done = page.locator(".dl-nums b").first.inner_text()
+    page.wait_for_timeout(1500)
+    assert page.locator(".dl-nums b").first.inner_text() == done         # 暂停期间进度不动
+    page.click("[data-dl=resume]")
+    page.wait_for_selector(".dl-result", timeout=20000)
+    text = page.locator(".dl-result").inner_text()
+    assert "还没有开始下载" in text and "检查失败" in text               # 新发现的多：先让我看；失败的画师列出来了
+    page.click(".dl-result [data-dl=review]")
+    page.wait_for_selector(".dl-rv-row")
+    rows = page.locator(".dl-rv-row")
+    total = rows.count()
+    rows.first.locator("input").uncheck()
+    assert f"已选 {total - 1} 位" in page.locator(".dl-rv-sum").inner_text().replace("\xa0", " ")
+    page.click("[data-dl=rv-skip]")
+    page.wait_for_function("n => document.querySelectorAll('.dl-rv-row').length === n", arg=total - 1)
+    assert "不下载" in page.locator("#toast-t").inner_text()
+    page.click("[data-dl=rv-download]")
+    page.wait_for_selector("[data-dl=pause]")
+    page.wait_for_selector(".dl-result", timeout=30000)
+    assert "下载成功" in page.locator(".dl-result").inner_text()
+
+
+def test_review_pending_and_restore_skipped(page):
+    open_dl(page)
+    page.click("[data-dl=review]")
+    page.wait_for_selector(".dl-rv-row")
+    before = page.locator(".dl-rv-row").count()
+    page.click("[data-rvtype=illust]")                                   # 去掉插画：只剩有漫画 / 动图的画师
+    page.wait_for_function("n => document.querySelectorAll('.dl-rv-row').length < n", arg=before)
+    page.click("[data-rvtype=illust]")
+    page.wait_for_function("n => document.querySelectorAll('.dl-rv-row').length === n", arg=before)
+    page.click("[data-dl=rv-none]")
+    assert page.locator("[data-dl=rv-download]").is_disabled()
+    page.locator(".dl-rv-row").nth(1).locator("input").check()
+    page.click("[data-dl=rv-skip]")                                      # 没选中的都标成不下载
+    page.wait_for_function("document.querySelectorAll('.dl-rv-row').length === 1")
+    page.click("[data-dl=rv-close]")
+    page.wait_for_selector(".dl-plan")
+    assert "不下载" in page.locator(".dl-plan").inner_text()
+    page.click(".dl-plan [data-dl=review][data-skipped]")
+    page.wait_for_selector(".dl-rv-row")
+    page.click("[data-dl=rv-restore]")
+    page.wait_for_selector(".dl-review .dl-empty")
+
+
+def test_failed_artists_tab(page):
+    open_dl(page)
+    assert "上次检查失败" in page.locator(".dl-plan").inner_text()
+    page.click(".dl-plan [data-dl=fail-tab]")
+    page.wait_for_selector(".dl-tabs")
+    text = page.locator("#dl-page").inner_text()
+    assert "被限速" in text and "已注销或不存在" in text
+    rows = page.locator(".dl-task")
+    before = rows.count()
+    rows.first.locator("[data-dl=artist-skip]").click()
+    page.wait_for_function("n => document.querySelectorAll('.dl-task').length === n - 1", arg=before)
+    assert "不再检查的画师 1 位" in page.locator("#dl-page").inner_text()
+    page.click("[data-dl=ask-failed]")                                   # 全部重查：回到更新页，范围已经选成“上次失败的”
+    page.wait_for_selector(".dl-confirm")
+    assert page.locator(".dl-opts [data-opt=scope]").input_value() == "failed"
+
+
+def test_failed_files_list_and_retry_now(page):
+    open_dl(page)
+    page.click("[data-dlpage=failed]")
+    page.wait_for_selector(".dl-tabs")
+    page.locator("[data-dl=list-open][data-kind=network]").click()
+    page.wait_for_selector(".dl-task")
+    assert page.locator(".dl-task").count() == 5
+    assert page.locator(".dl-task [data-dl=open-url]").first.get_attribute("data-url").startswith("https://www.pixiv.net/artworks/")
+    page.locator("[data-dl=retry-now][data-kinds=network]").click()      # 马上重试这一组：直接开始下载
+    page.wait_for_selector(".dl-run-card")
+    assert "重试失败的文件" in page.locator(".dl-run-card").inner_text()

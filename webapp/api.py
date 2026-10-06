@@ -683,6 +683,19 @@ class Api(UpdateApiMixin, LoginMixin):
         return {"scanned": len(targets)}
 
     # ================= 窗口（无边框窗口的标题栏按钮） =================
+    def save_text(self, name, text):
+        """让用户选个地方，把一段文字存成文件（导出清单用）。返回保存的路径；取消了返回空字符串。"""
+        import webview
+        if not self._window:
+            return ""
+        picked = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=str(name or "导出.txt"))
+        if not picked:
+            return ""
+        path = picked if isinstance(picked, str) else picked[0]
+        with open(path, "w", encoding="utf-8-sig", newline="") as f:      # 带 BOM：Excel 直接打开不乱码
+            f.write(str(text or ""))
+        return path
+
     # ---- 缩略图缓存
     def _prune_cache(self) -> None:
         """启动时在后台调用：删掉太久没用到的缩略图，并把总大小压回上限以内（规则见 utils/thumbnail_cache.py）"""
