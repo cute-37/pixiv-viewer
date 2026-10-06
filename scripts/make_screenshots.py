@@ -87,15 +87,9 @@ def main():
         shot(page, "download")
         page.keyboard.press("Escape")
 
-        # 5. 设置：外观
-        page.click("#btn-settings")
-        page.wait_for_selector(".dnav [data-page]")
-        page.locator(".dnav [data-page]").first.click()
-        page.wait_for_timeout(600)
-        shot(page, "settings")
         page.context.close()
 
-        # 6. 深色
+        # 5. 深色
         page = open_page('{"mode": "dark"}')
         shot(page, "dark")
         page.context.close()
