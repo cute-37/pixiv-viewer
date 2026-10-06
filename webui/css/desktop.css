@@ -1,0 +1,25 @@
+/* 桌面版窗口：自绘标题栏、上边缘缩放 */
+/* ================= 桌面版：自绘标题栏 ================= */
+.info-main { display: contents; }
+.winctl { position: absolute; top: 0; right: 0; z-index: 30; display: flex; height: 30px; }
+.winctl .grip { width: 28px; }
+.winctl button { width: 44px; height: 30px; border: 0; background: none; color: var(--text-2); display: grid; place-items: center; }
+.winctl button:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+.winctl button.close:hover { background: #e5484d; color: #fff; }
+.winctl svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; }
+.winctl .two, .maximized .winctl .one { display: none; }
+.maximized .winctl .two { display: inline; }
+.desktop .head { padding-right: 172px; }
+.desktop .vhead { padding-right: 172px; -webkit-user-select: none; user-select: none; }
+.desktop .head, .desktop .brand, .desktop .winctl .grip { -webkit-user-select: none; user-select: none; }
+
+/* ================= 窗口上边缘缩放 ================= */
+.win-edge { display: none; position: absolute; z-index: 31; top: 0; }
+.desktop:not(.maximized) .win-edge { display: block; }
+.win-edge.t { left: 10px; right: 10px; height: 4px; cursor: ns-resize; }
+.win-edge.tl { left: 0; width: 10px; height: 8px; cursor: nwse-resize; }
+.win-edge.tr { right: 0; width: 10px; height: 8px; cursor: nesw-resize; }
+
+/* 看图页顶部没有标题区，图片和信息栏直接顶到窗口上沿：桌面版在最上面留一条可以拖动窗口的区域
+   （“返回”等按钮叠在它上面，照常可点） */
+.drag-strip { display: none; }

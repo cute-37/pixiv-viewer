@@ -1,0 +1,17 @@
+/* 窄窗口时的调整 */
+/* ================= 窄屏 ================= */
+@media (max-width: 760px) {
+  .app, .app.collapsed { grid-template-columns: 0 0 minmax(0, 1fr); }
+  .side, .resizer { display: none; }
+  .head { flex-wrap: wrap; }
+  .search { flex: 1 1 100%; order: 3; }
+  .bar { flex-wrap: wrap; }
+  .bar > .tagstrip { flex-basis: 100%; order: 5; }
+  .size { display: none; }
+  .viewer, .viewer.no-info { grid-template-columns: minmax(0, 1fr) 0 0; }
+  .info, #info-resizer { display: none; }
+  .dialog { grid-template-columns: minmax(0, 1fr); }
+  .dnav { display: none; }
+  .set { flex-wrap: wrap; }
+  .set .ctl { max-width: 100%; justify-content: flex-start; }
+}

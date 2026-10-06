@@ -1,0 +1,9 @@
+这个文件夹里的字体随软件一起发布，均以 SIL Open Font License 1.1 授权：
+
+- LXGW WenKai TC（霞鹜文楷 TC）  Copyright 2021 The LXGW WenKai Project Authors
+  https://github.com/lxgw/LxgwWenkaiTC
+- M PLUS Rounded 1c  Copyright 2016 The M+ FONTS Project Authors
+  https://github.com/googlefonts/rounded-mplus
+
+许可全文: https://openfontlicense.org/open-font-license-official-text/
+字体文件由 scripts/fetch_fonts.py 从 Google Fonts 取得，未作修改。

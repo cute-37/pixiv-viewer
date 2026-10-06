@@ -1,0 +1,32 @@
+<meta charset="utf-8">
+<title>Pixiv 下载器</title>
+<meta name="color-scheme" content="light dark">
+<!-- 默认字体随程序自带（css/fonts.css + fonts/）。先按“打印用”加载、读完再启用，不拖慢界面出现 -->
+<link rel="stylesheet" media="print" onload="this.media='all'" href="css/fonts.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/sidebar.css">
+<link rel="stylesheet" href="css/toolbar.css">
+<link rel="stylesheet" href="css/grid.css">
+<link rel="stylesheet" href="css/viewer.css">
+<link rel="stylesheet" href="css/overlays.css">
+<link rel="stylesheet" href="css/responsive.css">
+<link rel="stylesheet" href="css/desktop.css">
+<link rel="stylesheet" href="css/downloader.css">
+
+<!-- 独立的 Pixiv 下载器：界面就是查看器里的“下载与更新”面板，铺满整个窗口（入口见 dl_main.py） -->
+<div id="app" class="app dl-app">
+  <div class="scrim" id="scrim"><div class="dl-empty" style="padding-top:120px"><span>正在启动…</span></div></div>
+  <div class="menu" id="menu" hidden></div>
+  <div class="win-edge t" data-edge="top"></div>
+  <div class="win-edge tl" data-edge="topleft"></div>
+  <div class="win-edge tr" data-edge="topright"></div>
+  <div class="winctl" id="winctl" hidden>
+    <div class="grip" data-drag></div>
+    <button data-win="minimize" title="最小化" aria-label="最小化"><svg viewBox="0 0 10 10"><path d="M0 5h10"/></svg></button>
+    <button data-win="toggle" id="win-max" title="最大化" aria-label="最大化或还原"><svg viewBox="0 0 10 10"><path class="one" d="M.5.5h9v9h-9z"/><path class="two" d="M2.5 2.5V.5h7v7h-2M.5 2.5h7v7h-7z"/></svg></button>
+    <button data-win="close" class="close" title="关闭" aria-label="关闭"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10"/></svg></button>
+  </div>
+  <div class="toast" id="toast" role="status"><span id="toast-t"></span><button class="linkbtn" id="toast-undo" hidden>撤销</button></div>
+</div>
+
+<script type="module" src="js/dl_app.js"></script>

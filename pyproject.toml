@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pixiv-image-viewer"
+dynamic = ["version"]  # 唯一版本号来源：utils/constants.py 的 APP_VERSION
+description = "A specialized image viewer for Pixiv downloads"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+  { name = "cute-37" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "Pillow>=9.0.0",
+    "cryptography>=3.4.0",
+    "keyring>=23.0.0",
+    "pywebview>=5.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/cute-37/pixiv-viewer"
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "ruff>=0.8"]
+
+[tool.setuptools.dynamic]
+version = { attr = "utils.constants.APP_VERSION" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["utils*", "webapp*", "pixiv_dl*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+extend-exclude = ["data"]
+
+[tool.ruff.lint]
+# F: pyflakes（含 F811 重复定义、F401 未使用导入）；E9: 语法错误；B: bugbear
+select = ["F", "E9", "B"]
+ignore = ["B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # 包的对外导出
+# 内置的下载模块原本是独立项目，沿用它自己的写法；它有自己的测试（tests/pixiv_dl）
+"pixiv_dl/**" = ["B904", "F401", "F841", "B007", "B018", "B023"]
+"tests/pixiv_dl/**" = ["B904", "F401", "F841", "B007", "B018", "B023"]

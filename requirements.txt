@@ -1,0 +1,15 @@
+# Pixiv 图片查看器依赖
+# Python >= 3.9
+
+Pillow>=9.0.0
+cryptography>=3.4.0
+keyring>=23.0.0
+pywebview>=5.0
+
+# 内置的 Pixiv 下载功能（pixiv_dl）
+pixivpy3>=3.7
+requests
+tqdm
+pysmb
+# paramiko   # 仅 SFTP 保存方式需要
+# boto3      # 仅 对象存储 (S3) 保存方式需要

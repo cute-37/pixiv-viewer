@@ -1,0 +1,65 @@
+/* 基础：颜色 / 尺寸变量、全局元素、整体外壳 */
+/* Pixiv Viewer —— 界面样式
+   布局：侧栏 | 拖动条 | 主区（标题栏 / 工具行 / 网格 / 状态条），看图页覆盖主区（画布 + 胶片条 | 拖动条 | 信息栏）。
+   所有颜色、尺寸都来自 :root 上的变量；settings.js 会按用户设置改写这些变量。
+   下面的默认值是“白砂”风格亮色 / 暗色。 */
+:root {
+  --bg: #ffffff; --side: #f6f6f7; --surface: #ffffff; --sunken: #f0f0f2; --canvas: #ececef;
+  --line: #e4e4e8; --text: #18181b; --text-2: #52525b; --text-3: #8b8b93;
+  --accent: #0096fa; --accent-fg: #ffffff; --accent-soft: #e3f3fe; --danger: #e5484d; --star: #f5a524;
+  --shadow-rgb: 20 20 30;
+
+  --fs: 13px; --ctl: 28px; --gap: 8px; --radius: 7px; --row: 30px; --title-fs: 19px;
+  --side-w: 228px; --info-w: 300px; --tile: 176px; --tile-gap: 10px; --tile-radius: 8px;
+  --ratio: 4 / 5; --shadow-k: 0.5; --bar-btn: 30px;
+  --font: "LXGW WenKai TC", "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --font-head: "M PLUS Rounded 1c", "Noto Sans SC", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --mono: "Cascadia Code", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #18181b; --side: #121214; --surface: #202024; --sunken: #27272b; --canvas: #0c0c0e;
+    --line: #2e2e33; --text: #ececef; --text-2: #a8a8b0; --text-3: #71717a;
+    --accent: #2aa6ff; --accent-fg: #06121c; --accent-soft: #10283b; --shadow-rgb: 0 0 0; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #18181b; --side: #121214; --surface: #202024; --sunken: #27272b; --canvas: #0c0c0e;
+  --line: #2e2e33; --text: #ececef; --text-2: #a8a8b0; --text-3: #71717a;
+  --accent: #2aa6ff; --accent-fg: #06121c; --accent-soft: #10283b; --shadow-rgb: 0 0 0; color-scheme: dark;
+}
+
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: var(--fs); line-height: 1.45; overflow: hidden; }
+* { box-sizing: border-box; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+::selection { background: var(--accent); color: var(--accent-fg); }
+svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.s { width: 12px; height: 12px; }
+[hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+.kbd { font-family: var(--mono); font-size: 10px; color: var(--text-3); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; line-height: 15px; white-space: nowrap; }
+
+/* ================= 外壳 ================= */
+.app { position: relative; height: 100%; display: grid; grid-template-columns: var(--side-w) 0 minmax(0, 1fr); overflow: hidden; }
+.app.collapsed { grid-template-columns: calc(16px + var(--gap) * 3) 0 minmax(0, 1fr); }
+.main, .viewer { grid-column: 3; grid-row: 1; min-width: 0; min-height: 0; }
+.resizer { position: relative; z-index: 3; width: 0; cursor: col-resize; }
+.resizer::before { content: ""; position: absolute; top: 0; bottom: 0; left: -3px; width: 6px; }
+.resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: transparent; transition: background .15s; }
+.resizer:hover::after, .resizer.drag::after { background: var(--accent); width: 2px; left: -1px; }
+.app.collapsed #side-resizer { display: none; }
+body.resizing { cursor: col-resize; user-select: none; }
+
+.icon-btn { width: var(--ctl); height: var(--ctl); flex: none; display: grid; place-items: center; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-2); }
+.icon-btn:hover { background: var(--sunken); color: var(--text); }
+.icon-btn.on { background: var(--accent-soft); color: var(--accent); }
+.icon-btn.xs { width: 22px; height: 22px; }
+.icon-btn.xs svg { width: 13px; height: 13px; }
+
+/* ================= 加载中 ================= */
+.content.loading::before { content: ""; position: sticky; top: 0; z-index: 4; display: block; height: 2px; margin-bottom: -2px; background: linear-gradient(90deg, transparent, var(--accent), transparent) 0 0 / 40% 100% no-repeat; animation: loadbar 0.9s linear infinite; }
+.content.loading #grid-root { opacity: 0.45; transition: opacity .15s .1s; }
+@keyframes loadbar { from { background-position: -70% 0; } to { background-position: 170% 0; } }

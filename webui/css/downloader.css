@@ -1,0 +1,150 @@
+/* 下载与更新（面板、并入设置的页面、独立下载器程序） */
+/* ================= 下载与更新 ================= */
+.dialog.dlc { width: min(820px, 100%); height: min(640px, 100%); }
+#dl-badge.live { color: var(--accent); font-weight: 600; }
+.row-btn.busy svg, .rail-btn.busy svg { color: var(--accent); animation: dl-bob 1.2s ease-in-out infinite; }
+@keyframes dl-bob { 50% { transform: translateY(2px); } }
+.dl-loading { color: var(--text-3); padding: calc(var(--gap) * 2) 0; text-align: center; }
+.dl-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 48px 0; color: var(--text-3); text-align: center; }
+.dl-empty svg { width: 28px; height: 28px; color: var(--text-3); }
+.dl-empty b { color: var(--text); font: 700 calc(var(--fs) + 2px) var(--font-head); }
+.dl-empty .btn { margin-top: 8px; }
+.dl-note { display: flex; align-items: center; gap: var(--gap); padding: var(--gap) calc(var(--gap) * 1.5); border-radius: calc(var(--radius) + 2px); background: var(--sunken); border: 1px solid var(--line); }
+.dl-note > div { flex: 1; min-width: 0; }
+.dl-note small { display: block; color: var(--text-3); }
+.dl-note.lv-error { border-color: color-mix(in srgb, #e5484d 45%, var(--line)); background: color-mix(in srgb, #e5484d 7%, var(--surface)); }
+.dl-note.lv-error svg { color: #e5484d; }
+.dl-note.lv-warn svg { color: #f59e0b; }
+.dl-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap); padding: calc(var(--gap) * 1.75) calc(var(--gap) * 1.5) var(--gap); }
+.dl-stats b { display: block; font: 700 calc(var(--fs) + 7px) var(--font-head); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl-stats span { color: var(--text-3); font-size: calc(var(--fs) - 1px); }
+.dl-actions { display: flex; align-items: center; gap: var(--gap); padding: var(--gap) calc(var(--gap) * 1.5); flex-wrap: wrap; }
+.dl-actions .sp { flex: 1; }
+.dl-actions.sticky { position: sticky; bottom: calc(var(--gap) * -2); margin: 0 calc(var(--gap) * -0.5); padding: var(--gap) calc(var(--gap) * 0.5) calc(var(--gap) * 2); background: linear-gradient(transparent, var(--bg) 30%); }
+.btn.big { height: calc(var(--ctl) + 6px); padding: 0 calc(var(--gap) * 2); font-weight: 600; }
+.btn:disabled { opacity: 0.45; pointer-events: none; }
+.btn.danger { color: #e5484d; border-color: color-mix(in srgb, #e5484d 50%, var(--line)); }
+.dl-hint { margin: 0; padding: 0 calc(var(--gap) * 1.5) var(--gap); color: var(--text-3); font-size: calc(var(--fs) - 1px); line-height: 1.5; }
+.dl-confirm p { margin: 0; padding: 0 calc(var(--gap) * 1.5) 6px; line-height: 1.55; }
+.dl-confirm-t, .dl-run-head { display: flex; align-items: center; gap: var(--gap); padding: calc(var(--gap) * 1.5) calc(var(--gap) * 1.5) var(--gap); }
+.dl-confirm-t b, .dl-run-head b { font: 700 calc(var(--fs) + 2px) var(--font-head); }
+.dl-confirm-t svg { color: var(--accent); }
+.dl-run-head .sp, .dl-nums .sp { flex: 1; }
+.dl-phase { color: var(--text-3); }
+.dl-check { display: flex; align-items: center; gap: 6px; padding: 2px calc(var(--gap) * 1.5) 6px; color: var(--text-2); }
+.dl-check input { accent-color: var(--accent); }
+.dl-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--accent-soft); border-top-color: var(--accent); animation: dl-rot .8s linear infinite; flex: none; }
+@keyframes dl-rot { to { transform: rotate(360deg); } }
+.dl-bar { height: 6px; margin: 0 calc(var(--gap) * 1.5); border-radius: 3px; background: var(--sunken); overflow: hidden; }
+.dl-bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width .5s linear; }
+.dl-bar.indet i { width: 30% !important; animation: dl-slide 1.2s ease-in-out infinite; }
+@keyframes dl-slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+.dl-nums { display: flex; flex-wrap: wrap; gap: 4px calc(var(--gap) * 1.5); padding: var(--gap) calc(var(--gap) * 1.5); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.dl-nums b { color: var(--text); font-weight: 700; }
+.dl-nums .bad, .bad { color: #e5484d; }
+.dl-workers { display: grid; gap: 2px; padding: 0 calc(var(--gap) * 1.5) var(--gap); font-size: calc(var(--fs) - 1px); }
+.dl-workers > div { display: flex; gap: var(--gap); min-width: 0; }
+.dl-workers .nm { flex: none; width: 96px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-workers .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.dl-logs { margin: 0 calc(var(--gap) * 1.5); padding: 6px 8px; border-radius: var(--radius); background: var(--sunken); color: var(--text-3); font: calc(var(--fs) - 2px)/1.5 ui-monospace, Consolas, monospace; max-height: 76px; overflow: hidden; }
+.dl-logs.open { max-height: 260px; overflow: auto; }
+.dl-logs.open > div { white-space: pre-wrap; word-break: break-all; overflow: visible; }
+.dl-logs .tm { color: var(--text-3); margin-right: 8px; opacity: 0.75; }
+.dl-logs .w { color: #b7791f; } .dl-logs .e { color: #e5484d; }
+.dl-result .dl-logs { margin-bottom: var(--gap); }
+.dl-logs > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl-run-card .linkbtn { margin: 4px calc(var(--gap) * 1.5) var(--gap); }
+.dl-result.done .dl-run-head svg { color: #12a594; }
+.dl-result.error .dl-run-head svg, .dl-result.cancelled .dl-run-head svg { color: #f59e0b; }
+.dl-err { margin: 0; padding: 0 calc(var(--gap) * 1.5) var(--gap); color: #e5484d; }
+.dl-sec { padding: 2px calc(var(--gap) * 1.5) var(--gap); display: flex; flex-direction: column; gap: 5px; }
+.dl-sec .lbl { color: var(--text-3); font-size: calc(var(--fs) - 2px); font-weight: 600; }
+.dl-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.dl-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 11px; background: var(--sunken); color: var(--text-2); font-size: calc(var(--fs) - 1px); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl-chip b { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+.dl-chip.bad b { color: #e5484d; }
+.dl-chip.more { background: none; color: var(--text-3); }
+.dl-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 9px; font-size: calc(var(--fs) - 2.5px); font-weight: 600; background: var(--sunken); color: var(--text-3); white-space: nowrap; }
+.dl-tag.ok, .dl-tag.done { background: color-mix(in srgb, #12a594 14%, transparent); color: #0f8a7b; }
+.dl-tag.error { background: color-mix(in srgb, #e5484d 14%, transparent); color: #e5484d; }
+.dl-tag.cancelled { background: color-mix(in srgb, #f59e0b 16%, transparent); color: #b7791f; }
+.dl-acc-n, .dl-fail-t { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 600; }
+.dl-fail-t b { color: #e5484d; font-variant-numeric: tabular-nums; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 0.92em; word-break: break-all; }
+.dl-form { display: grid; gap: var(--gap); padding: var(--gap) calc(var(--gap) * 1.5) 2px; }
+.dl-form label { display: grid; gap: 3px; color: var(--text-3); font-size: calc(var(--fs) - 1px); }
+.dl-form input, .dlc .set input[type=password] { height: calc(var(--ctl) - 2px); border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); color: var(--text); padding: 0 8px; min-width: 0; }
+.dlc .set input[type=text], .dlc .set input[type=password] { width: 250px; max-width: 100%; }
+.dlc .set input[type=number] { width: 68px; }
+.dl-form input:focus, .dlc .set input:focus { outline: none; border-color: var(--accent); }
+.dl-steps { display: grid; gap: 8px; padding: var(--gap) calc(var(--gap) * 1.5) 2px; line-height: 1.55; }
+.dl-steps > div { display: flex; gap: var(--gap); }
+.dl-steps b { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: calc(var(--fs) - 2px); }
+.dl-step { display: flex; align-items: baseline; gap: 6px; padding: 5px calc(var(--gap) * 1.5); line-height: 1.5; }
+.dl-step svg { flex: none; align-self: center; width: 14px; height: 14px; }
+.dl-step.ok svg { color: #12a594; } .dl-step.bad svg { color: #e5484d; }
+.dl-step b { flex: none; font-weight: 600; }
+.dl-step span { color: var(--text-2); min-width: 0; }
+.dl-test.bad { border-color: color-mix(in srgb, #e5484d 40%, var(--line)); }
+.dl-folders { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 2px; padding: 4px var(--gap); max-height: 190px; overflow: auto; }
+.dl-folders button { display: flex; align-items: center; gap: 6px; height: var(--row); padding: 0 8px; border: 0; border-radius: var(--radius); background: none; color: var(--text); text-align: left; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dl-folders button:hover { background: var(--sunken); }
+.dl-folders svg { color: var(--text-3); }
+.dl-browse .gh { letter-spacing: 0; font-weight: 400; }
+.dl-about { padding: 2px calc(var(--gap) * 1.5) var(--gap); color: var(--text-2); line-height: 1.6; }
+.dl-about p { margin: 6px 0; }
+.seg.wrap { flex-wrap: wrap; }
+.seg.multi button.on + button.on { margin-left: 2px; }
+
+/* 设置项里选项较多时：标题在上，选项单独占一整行并等分 */
+.set.col { flex-direction: column; align-items: stretch; gap: var(--gap); }
+.seg.even { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
+.seg.even button { padding-left: 4px; padding-right: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl-note.lv-ok svg { color: #12a594; }
+.dl-note.lv-ok { border-color: color-mix(in srgb, #12a594 35%, var(--line)); }
+.dl-note small.mono, .set .t small.mono { margin-top: 2px; }
+
+/* ================= 独立的下载器程序：面板铺满整个窗口 ================= */
+.app.dl-app { display: block; }
+.dl-app .scrim { position: absolute; inset: 0; padding: 0; background: var(--bg); animation: none; display: block; }
+.dl-app .dialog.dlc { width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; grid-template-columns: 200px minmax(0, 1fr); }
+.dl-app [data-dlclose] { display: none; }
+.dl-app .dnav { padding-top: calc(var(--gap) * 1.5); }
+.dl-app .dnav .dt { font-size: calc(var(--fs) + 3px); padding-bottom: calc(var(--gap) * 1.5); }
+.dl-app .dpage { padding-left: calc(var(--gap) * 4); padding-right: calc(var(--gap) * 4); }
+.dl-app .dpage > * { width: 100%; max-width: 760px; margin-left: auto; margin-right: auto; }
+.dl-app .dhead { padding-left: calc(var(--gap) * 4); }
+.dl-app .dhead h3 { max-width: 760px; margin: 0 auto; width: 100%; }
+.desktop .dl-app .dhead, .desktop .dl-app .dnav .dt { -webkit-user-select: none; user-select: none; }
+.dl-app .dnav .dt { display: flex; align-items: center; gap: var(--gap); }
+
+/* ================= 下载：操作面板（更新 / 失败处理）与并入“设置”的页面 ================= */
+.dialog.dlc.ops { width: min(720px, 100%); height: min(620px, 100%); grid-template-columns: minmax(0, 1fr); }
+.dlc.ops .dhead { gap: var(--gap); }
+.dlc.ops .dhead h3 { flex: none; margin-right: var(--gap); }
+.dlc.ops .dhead .sp { flex: 1; }
+.dlc.ops .seg .n:not(:empty) { margin-left: 5px; color: #e5484d; font-size: calc(var(--fs) - 2px); font-variant-numeric: tabular-nums; }
+.dl-host { display: contents; }
+.dnav .grp { padding: calc(var(--gap) * 1.25) calc(var(--gap) * 0.75) 3px; color: var(--text-3); font-size: calc(var(--fs) - 2px); font-weight: 600; letter-spacing: 0.04em; }
+.dnav .dt + .grp { padding-top: 2px; }
+/* 数据文件夹里的三项、可导入的种类、已选的文件 */
+.dl-files { padding: 0 calc(var(--gap) * 1.5) var(--gap); display: grid; gap: 4px; }
+.dl-file { display: flex; align-items: center; gap: var(--gap); min-width: 0; font-size: calc(var(--fs) - 1px); }
+.dl-file .nm { flex: none; width: 108px; color: var(--text-2); }
+.dl-file .mono { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); direction: rtl; text-align: left; }
+.dl-kinds { display: grid; gap: 8px; padding: 2px calc(var(--gap) * 1.5) var(--gap); }
+.dl-kinds > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.dl-kinds b { font-weight: 600; }
+.dl-kinds .was, .dl-picked .was { color: var(--text-3); font-size: calc(var(--fs) - 1.5px); }
+.dl-kinds small { flex-basis: 100%; color: var(--text-3); font-size: calc(var(--fs) - 1.5px); line-height: 1.45; padding-left: 42px; }
+.dl-picked { display: grid; gap: 2px; margin: 0 calc(var(--gap) * 1.5) var(--gap); padding: 6px 0; border-top: 1px solid var(--line); }
+.dl-picked > div { display: flex; gap: var(--gap); padding: 5px 0; }
+.dl-picked > div > svg { flex: none; width: 15px; height: 15px; margin-top: 2px; }
+.dl-picked .ok > svg { color: #12a594; } .dl-picked .bad > svg { color: #e5484d; }
+.dl-picked b { font-weight: 600; word-break: break-all; }
+.dl-picked .arrow { margin: 0 6px; color: var(--text-3); }
+.dl-picked .was { margin-left: 8px; }
+.dl-picked small { display: block; color: var(--text-3); font-size: calc(var(--fs) - 1.5px); line-height: 1.5; }
+.dl-picked .bad b:first-child { color: var(--text-2); font-weight: 400; }
+
+.dl-vis-hint { color: #b7791f !important; }
