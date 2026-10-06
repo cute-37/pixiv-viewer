@@ -260,7 +260,7 @@ function mockDownloader() {
     S3_ENDPOINT: "", S3_REGION: "", S3_BUCKET: "", S3_PREFIX: "", S3_ACCESS_KEY: "", S3_SECRET_KEY_SET: false, S3_PATH_STYLE: false, S3_VERIFY_TLS: true,
     PROXY_MODE: "system", PROXY_URL: "", REVIEW_THRESHOLD: 2000, KEEP_AWAKE: true,
     MAIN_ACCOUNT_SYNC_THREADS: 1, BACKUP_ACCOUNT_SYNC_THREADS: 1, MAIN_ACCOUNT_DOWNLOAD_THREADS: 1, BACKUP_ACCOUNT_DOWNLOAD_THREADS: 2, DELAY_SYNC: [1.5, 3], DELAY_DOWNLOAD: [0.8, 2],
-    FAILURE_RATE_THRESHOLD: 0.5, RATE_LIMIT_ENABLED: true, MAX_RETRIES: 3, SYNC_TYPES: ["illust", "manga"], SYNC_NOVELS: true, METADATA_REFRESH_LIMIT: 20, UGOIRA_PREFER_HQ: true, UGOIRA_WEBP_LOSSLESS: true,
+    FAILURE_RATE_THRESHOLD: 0.5, RATE_LIMIT_ENABLED: true, REST_EVERY: 500, REST_SECONDS: 10, MAX_RETRIES: 3, SYNC_TYPES: ["illust", "manga"], SYNC_NOVELS: true, METADATA_REFRESH_LIMIT: 20, UGOIRA_PREFER_HQ: true, UGOIRA_WEBP_LOSSLESS: true,
   };
   let accounts = [
     { name: "main", username: "示例用户", user_id: 1234567, remark: "", is_valid: true, last_tested: "2026-10-02 21:10:00", is_main: true, token_hint: "abcd…wxyz", r18: true, r18g: true },

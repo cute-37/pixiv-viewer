@@ -65,27 +65,38 @@ class AuthBroken(Exception):
 
 
 class Throttle:
-    """全局节流：每累计下载 N 个文件的"风控休息" + 失败率过高时的"自动降速"。
+    """下载的节奏控制。
 
-    所有 worker 在开始处理新作品前调用 wait()，被要求休息时统一等待。
+    - 周期性休息：按账号各算各的——某个账号每下完 REST_EVERY 个文件，这个账号休息 REST_SECONDS 秒，别的账号照常下。
+      以前是所有账号合在一起数、一起停，账号越多停得越频繁，多账号的提速大半被吃掉了。
+    - 失败率过高、图片服务器限速：所有账号一起停一会儿（这两种情况和哪个账号无关）。
+
+    各工作线程在开始处理新作品前调用 wait(账号)，该休息时在这里等。
     """
 
     def __init__(self, job=None):
         self._lock = threading.Lock()
-        self._resume_at = 0.0
-        self._count = 0
+        self._resume_at = 0.0           # 所有账号一起停到什么时候
+        self._account_until = {}        # 账号 -> 这个账号休息到什么时候
+        self._counts = {}               # 账号 -> 已下载的文件数
         self._window = deque(maxlen=max(5, int(getattr(Config, 'FAILURE_RATE_WINDOW', 20))))
         self._job = job
 
-    def _pause(self, seconds, reason):
+    def _pause(self, seconds, reason, account=None):
         until = time.time() + seconds
-        if until > self._resume_at:
-            self._resume_at = until
-        logger.info(f"{reason}，全局暂停 {seconds} 秒")
+        if account is None:
+            if until > self._resume_at:
+                self._resume_at = until
+            text = f"{reason}，所有账号暂停 {seconds} 秒"
+        else:
+            if until > self._account_until.get(account, 0.0):
+                self._account_until[account] = until
+            text = f"账号 {account} {reason}，休息 {seconds} 秒（其他账号继续）"
+        logger.info(text)
         if self._job:
-            self._job.log(f"{reason}，暂停 {seconds} 秒")
+            self._job.log(text)
 
-    def record(self, ok):
+    def record(self, ok, account=None):
         with self._lock:
             self._window.append(1 if ok else 0)
             if getattr(Config, 'AUTO_THROTTLE_ENABLED', True) and len(self._window) >= 5:
@@ -95,13 +106,11 @@ class Throttle:
                     self._pause(getattr(Config, 'FAILURE_PAUSE_SECONDS', 10), f"失败率过高({fail_rate:.0%})")
                     return
             if ok:
-                self._count += 1
-                if getattr(Config, 'RATE_LIMIT_ENABLED', False):
-                    rules = getattr(Config, 'RATE_LIMIT_RULES', {}) or {}
-                    for threshold in sorted(rules, reverse=True):
-                        if threshold > 0 and self._count % threshold == 0:
-                            self._pause(rules[threshold], f"已下载 {self._count} 个文件，风控休息")
-                            break
+                count = self._counts[account] = self._counts.get(account, 0) + 1
+                every = int(getattr(Config, 'REST_EVERY', 0) or 0)
+                seconds = int(getattr(Config, 'REST_SECONDS', 0) or 0)
+                if getattr(Config, 'RATE_LIMIT_ENABLED', False) and every > 0 and seconds > 0 and count % every == 0:
+                    self._pause(seconds, f"已下载 {count} 个文件", account=account)
 
     def hold(self, seconds, reason):
         """所有下载线程一起停一会儿"""
@@ -110,20 +119,24 @@ class Throttle:
             if self._resume_at - time.time() < seconds * 0.5:
                 self._pause(seconds, reason)
 
-    def remaining(self):
-        return max(0.0, self._resume_at - time.time())
+    def remaining(self, account=None):
+        with self._lock:
+            until = max(self._resume_at, self._account_until.get(account, 0.0))
+        return max(0.0, until - time.time())
 
-    def wait(self):
-        """休息期间阻塞；被中断时返回 True。"""
+    def wait(self, account=None):
+        """该休息时在这里等；被中断时返回 True。"""
         while True:
-            remain = self._resume_at - time.time()
+            with self._lock:
+                everyone = self._resume_at - time.time()
+                remain = max(everyone, self._account_until.get(account, 0.0) - time.time())
             if remain <= 0:
                 return False
-            if self._job:
-                self._job.set(message=f"风控休息中，剩余 {int(remain) + 1} 秒")
+            if self._job and everyone > 0:
+                self._job.set(message=f"所有账号暂停中，剩余 {int(everyone) + 1} 秒")
             if interrupt.wait(min(remain, 1.0)):
                 return True
-            if self._resume_at - time.time() <= 0 and self._job:
+            if self._job and everyone > 0 and self._resume_at - time.time() <= 0:
                 self._job.set(message="")
 
 
@@ -276,7 +289,7 @@ class DownloadMixin:
                 job.add(done=1, success=1, bytes=rest[0])
                 job.worker_add(client.name, success=1, bytes=rest[0])
                 job.tally('downloaded', aid, name=name, files=1, bytes=rest[0])
-                throttle.record(True)
+                throttle.record(True, client.name)
             elif kind == 'skip':
                 job.add(done=1, success=1, skipped=1, bytes=rest[0])
                 job.worker_add(client.name, success=1)
@@ -600,9 +613,9 @@ class DownloadMixin:
                     continue
                 used_api = False
                 try:
-                    if throttle.remaining() > 0:
-                        job.worker_set(client.name, state='resting', text='风控休息中')
-                    if throttle.wait():
+                    if throttle.remaining(me) > 0:
+                        job.worker_set(me, state='resting', text='休息中')
+                    if throttle.wait(me):
                         q.put((iid, mt, ts, tried))
                         return
                     used_api = self._process_group(client, wdb, iid, mt, ts, throttle)

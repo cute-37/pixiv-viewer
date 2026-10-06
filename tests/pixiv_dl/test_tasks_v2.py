@@ -648,3 +648,32 @@ def test_keep_awake_can_be_turned_off(stocked, cfg, monkeypatch):
     pro._process_group = slow
     pro.download()
     assert calls == []
+
+
+# ================================================================ 周期性休息：每个账号各算各的
+def test_periodic_rest_is_per_account_in_a_real_download(cfg, no_sleep, monkeypatch):
+    from pixiv_dl import downloader
+    monkeypatch.setattr(cfg, 'RATE_LIMIT_ENABLED', True)
+    monkeypatch.setattr(cfg, 'REST_EVERY', 3)
+    monkeypatch.setattr(cfg, 'REST_SECONDS', 1)
+    api = api_with({10: ('Alice', list(range(120, 100, -1)))})            # 20 个作品
+    pro, _ = make_processor(api, routes_for(api))
+    pro.clients['backup'] = make_client(api, name='backup', token='tok-b')
+    cfg.TOKENS['backup'] = {'token': 'tok-b', 'is_valid': True}
+    pauses = []
+    real = downloader.Throttle._pause
+
+    def spy(self, seconds, reason, account=None):
+        pauses.append(account)
+        return real(self, seconds, reason, account)
+
+    monkeypatch.setattr(downloader.Throttle, '_pause', spy)
+    pro.sync()
+    pro.download()
+    assert pro.job.success == 20
+    assert pauses and None not in pauses                                  # 只有“某个账号休息”，没有“所有账号一起停”
+    workers = {w['name']: w['success'] for w in pro.job.snapshot()['workers']}
+    assert sum(workers.values()) == 20
+    for name, done in workers.items():                                    # 每个账号按自己下的数量休息
+        assert pauses.count(name) == done // 3
+    assert any('其他账号继续' in line['msg'] for line in pro.job.snapshot()['logs'])

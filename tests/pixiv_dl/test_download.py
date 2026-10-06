@@ -329,30 +329,37 @@ def test_throttle_failure_rate_triggers_pause(cfg, monkeypatch):
 
 def test_throttle_periodic_rest_rule(cfg, monkeypatch):
     monkeypatch.setattr(cfg, 'RATE_LIMIT_ENABLED', True)
-    monkeypatch.setattr(cfg, 'RATE_LIMIT_RULES', {5: 20, 2: 1})
+    monkeypatch.setattr(cfg, 'REST_EVERY', 3)
+    monkeypatch.setattr(cfg, 'REST_SECONDS', 20)
     t = Throttle()
-    t.record(True)
-    assert t._resume_at == 0
-    t.record(True)                        # 第 2 个：触发 1 秒规则
-    assert t._resume_at > 0
-    t._resume_at = 0
-    for _ in range(3):
-        t.record(True)                    # 第 5 个：触发较大阈值(20s)
-    import time
-    assert t._resume_at - time.time() > 10
+    # 每个账号各数各的：两个账号各下了 2 个，谁都还没到 3 个
+    for _ in range(2):
+        t.record(True, 'main')
+        t.record(True, 'backup')
+    assert t.remaining('main') == 0 and t.remaining('backup') == 0
+    t.record(True, 'main')                # main 的第 3 个：只有 main 休息
+    assert t.remaining('main') > 10 and t.remaining('backup') == 0 and t._resume_at == 0
+    t.record(True, 'backup')              # backup 的第 3 个：它也休息
+    assert t.remaining('backup') > 10
+    monkeypatch.setattr(cfg, 'RATE_LIMIT_ENABLED', False)
+    quiet = Throttle()
+    for _ in range(9):
+        quiet.record(True, 'main')
+    assert quiet.remaining('main') == 0   # 关掉之后不休息
 
 
 def test_throttle_blocks_workers_during_download(cfg, no_sleep, monkeypatch):
     """回归：风控休息曾写在 join() 之后，下载过程中根本不会暂停。"""
     monkeypatch.setattr(cfg, 'RATE_LIMIT_ENABLED', True)
-    monkeypatch.setattr(cfg, 'RATE_LIMIT_RULES', {2: 5})
+    monkeypatch.setattr(cfg, 'REST_EVERY', 2)
+    monkeypatch.setattr(cfg, 'REST_SECONDS', 5)
     waits = []
     from pixiv_dl import downloader
     orig = downloader.Throttle.wait
 
-    def spy(self):
-        waits.append(self._resume_at)
-        return orig(self)
+    def spy(self, account=None):
+        waits.append(self._account_until.get(account, 0))
+        return orig(self, account)
     monkeypatch.setattr(downloader.Throttle, 'wait', spy)
     monkeypatch.setattr(cfg, 'MAIN_ACCOUNT_DOWNLOAD_THREADS', 1)
     api = FakeAPI()

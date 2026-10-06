@@ -44,9 +44,9 @@ const STORAGE_FIELDS = {
     ["S3_ACCESS_KEY", "Access Key", "text", ""], ["S3_SECRET_KEY", "Secret Key", "password", ""], ["S3_PATH_STYLE", "路径风格访问", "bool", "MinIO 等自建服务通常要打开"], ["S3_VERIFY_TLS", "校验 HTTPS 证书", "bool", ""]],
 };
 const PRESETS = {
-  conservative: ["保守", "最不容易被限速，速度较慢", { MAIN_ACCOUNT_SYNC_THREADS: 1, BACKUP_ACCOUNT_SYNC_THREADS: 1, MAIN_ACCOUNT_DOWNLOAD_THREADS: 1, BACKUP_ACCOUNT_DOWNLOAD_THREADS: 1, DELAY_SYNC: [2, 4], DELAY_DOWNLOAD: [1.5, 3.5], FAILURE_RATE_THRESHOLD: 0.4, RATE_LIMIT_ENABLED: true, MAX_RETRIES: 3 }],
-  balanced: ["平衡", "速度和稳定性折中，推荐", { MAIN_ACCOUNT_SYNC_THREADS: 1, BACKUP_ACCOUNT_SYNC_THREADS: 1, MAIN_ACCOUNT_DOWNLOAD_THREADS: 1, BACKUP_ACCOUNT_DOWNLOAD_THREADS: 2, DELAY_SYNC: [1.5, 3], DELAY_DOWNLOAD: [0.8, 2], FAILURE_RATE_THRESHOLD: 0.5, RATE_LIMIT_ENABLED: true, MAX_RETRIES: 3 }],
-  aggressive: ["激进", "更快，但更容易被 Pixiv 限速，只建议短时间使用", { MAIN_ACCOUNT_SYNC_THREADS: 2, BACKUP_ACCOUNT_SYNC_THREADS: 2, MAIN_ACCOUNT_DOWNLOAD_THREADS: 2, BACKUP_ACCOUNT_DOWNLOAD_THREADS: 3, DELAY_SYNC: [0.8, 1.5], DELAY_DOWNLOAD: [0.2, 1], FAILURE_RATE_THRESHOLD: 0.6, RATE_LIMIT_ENABLED: true, MAX_RETRIES: 4 }],
+  conservative: ["保守", "最不容易被限速，速度较慢", { MAIN_ACCOUNT_SYNC_THREADS: 1, BACKUP_ACCOUNT_SYNC_THREADS: 1, MAIN_ACCOUNT_DOWNLOAD_THREADS: 1, BACKUP_ACCOUNT_DOWNLOAD_THREADS: 1, DELAY_SYNC: [2, 4], DELAY_DOWNLOAD: [1.5, 3.5], FAILURE_RATE_THRESHOLD: 0.4, RATE_LIMIT_ENABLED: true, REST_EVERY: 200, REST_SECONDS: 15, MAX_RETRIES: 3 }],
+  balanced: ["平衡", "速度和稳定性折中，推荐", { MAIN_ACCOUNT_SYNC_THREADS: 1, BACKUP_ACCOUNT_SYNC_THREADS: 1, MAIN_ACCOUNT_DOWNLOAD_THREADS: 1, BACKUP_ACCOUNT_DOWNLOAD_THREADS: 2, DELAY_SYNC: [1.5, 3], DELAY_DOWNLOAD: [0.8, 2], FAILURE_RATE_THRESHOLD: 0.5, RATE_LIMIT_ENABLED: true, REST_EVERY: 500, REST_SECONDS: 10, MAX_RETRIES: 3 }],
+  aggressive: ["激进", "更快，但更容易被 Pixiv 限速，只建议短时间使用", { MAIN_ACCOUNT_SYNC_THREADS: 2, BACKUP_ACCOUNT_SYNC_THREADS: 2, MAIN_ACCOUNT_DOWNLOAD_THREADS: 2, BACKUP_ACCOUNT_DOWNLOAD_THREADS: 3, DELAY_SYNC: [0.8, 1.5], DELAY_DOWNLOAD: [0.2, 1], FAILURE_RATE_THRESHOLD: 0.6, RATE_LIMIT_ENABLED: false, REST_EVERY: 500, REST_SECONDS: 10, MAX_RETRIES: 4 }],
 };
 
 const fmtDur = (s) => { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return m >= 60 ? `${Math.floor(m / 60)} 小时 ${m % 60} 分` : m ? `${m} 分 ${s % 60} 秒` : `${s} 秒`; };
@@ -363,7 +363,7 @@ export function initDownloader(ctx) {
       <div class="dl-actions">${b.share ? `<button class="btn primary" data-dl="browse-use">保存到这里</button>` : ""}<button class="btn ghost" data-dl="browse-close">关闭</button></div></div>`;
   }
   const OPTION_KEYS = ["MAIN_ACCOUNT_SYNC_THREADS", "BACKUP_ACCOUNT_SYNC_THREADS", "MAIN_ACCOUNT_DOWNLOAD_THREADS", "BACKUP_ACCOUNT_DOWNLOAD_THREADS", "DELAY_SYNC", "DELAY_DOWNLOAD",
-    "FAILURE_RATE_THRESHOLD", "RATE_LIMIT_ENABLED", "MAX_RETRIES", "SYNC_TYPES", "SYNC_NOVELS", "METADATA_REFRESH_LIMIT", "UGOIRA_PREFER_HQ", "UGOIRA_WEBP_LOSSLESS",
+    "FAILURE_RATE_THRESHOLD", "RATE_LIMIT_ENABLED", "REST_EVERY", "REST_SECONDS", "MAX_RETRIES", "SYNC_TYPES", "SYNC_NOVELS", "METADATA_REFRESH_LIMIT", "UGOIRA_PREFER_HQ", "UGOIRA_WEBP_LOSSLESS",
     "PROXY_MODE", "PROXY_URL", "REVIEW_THRESHOLD", "KEEP_AWAKE"];
   const PROXY_MODES = [["system", "跟随系统设置"], ["custom", "自定义"], ["none", "不使用代理"]];
   const PROXY_HINTS = {
@@ -399,7 +399,8 @@ export function initDownloader(ctx) {
         ${row("下载的线程数", "主账号 / 每个备用账号", `${num("MAIN_ACCOUNT_DOWNLOAD_THREADS", 1, 8)}<span>/</span>${num("BACKUP_ACCOUNT_DOWNLOAD_THREADS", 1, 8)}`)}
         ${row("检查时每翻一页等待", "随机取这个范围内的时间", pair("DELAY_SYNC"))}
         ${row("每下载一个作品等待", "随机取这个范围内的时间", pair("DELAY_DOWNLOAD"))}
-        ${row("周期性休息", "每下载一定数量后暂停一会儿，降低被限速的风险", sw("RATE_LIMIT_ENABLED"))}
+        ${row("周期性休息", "每个账号各算各的：某个账号下完一定数量后自己歇一会儿，别的账号照常下，所以账号越多总速度越快。真被限速时程序会自动等待，这一项只是预防，可以关掉。", sw("RATE_LIMIT_ENABLED"))}
+        ${val("RATE_LIMIT_ENABLED") ? row("每个账号每下载", "", `${num("REST_EVERY", 10, 1000000)}<span>个文件，休息</span>${num("REST_SECONDS", 1, 3600)}<span>秒</span>`) : ""}
         ${row("失败率超过多少就暂停", "最近 20 次里失败的比例（0.1 – 0.9）", num("FAILURE_RATE_THRESHOLD", 0.1, 0.9, 0.05))}
         ${row("单个文件最多重试", "", `${num("MAX_RETRIES", 1, 10)}<span>次</span>`)}
       </div>
