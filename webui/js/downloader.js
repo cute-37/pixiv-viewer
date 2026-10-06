@@ -70,7 +70,7 @@ export function initDownloader(ctx) {
     refreshed: null,         // 已经为哪个任务刷新过图库
     speed: { t: 0, bytes: 0, done: 0, bps: 0, ips: 0 },
     settings: null, form: {}, test: null, accounts: null, failures: null, info: null, busy: "", link: null,
-    oauth: null, browse: null, logsOpen: false, logLines: [], logSince: 0,
+    oauth: null, login: null, loginError: "", browse: null, logsOpen: false, logLines: [], logSince: 0,
     imp: { items: [], results: null, busy: false },      // 导入：已选并识别出来的文件、导入结果
   };
   let pollTimer = 0;
@@ -388,16 +388,25 @@ export function initDownloader(ctx) {
         : `<div class="set"><div class="t">还没有账号<small>添加一个 Pixiv 账号后才能检查更新和下载。</small></div></div>`}
       ${list.length ? `<div class="set"><div class="t">验证全部账号<small>逐个检查登录是否还有效，并检测每个账号能不能看到 R-18 / R-18G 作品（会访问 Pixiv，每个账号几次请求）。下载时，这两类作品只分配给看得到的账号。</small></div><div class="ctl"><button class="btn" data-dl="acc-test" ${state.busy === "acc-test" ? "disabled" : ""}>${state.busy === "acc-test" ? "正在验证…" : "验证"}</button></div></div>` : ""}
     </div>
-    <div class="group"><div class="gh">添加账号 · 登录授权（推荐）</div>
+    ${api.loginStart ? `<div class="group"><div class="gh">添加账号 · 登录（推荐）</div>
+      ${state.login ? `<div class="set"><div class="t">${state.login.status === "finishing" ? "登录成功，正在添加账号…" : "已经打开登录窗口"}
+          <small>${state.login.status === "finishing" ? "正在向 Pixiv 确认并检测这个账号，稍等几秒。" : "请在弹出的窗口里登录 Pixiv。登录完成后窗口会自动关闭，账号会出现在上面的列表里。"}</small></div>
+          <div class="ctl">${state.login.status === "finishing" ? "" : `<button class="btn ghost" data-dl="login-cancel">取消</button>`}</div></div>`
+        : `<div class="set"><div class="t">登录 Pixiv 账号<small>会弹出一个窗口显示 Pixiv 官方的登录页。账号和密码只输入在 Pixiv 的页面里，软件不会看到，也不会保存它们。</small>
+          ${state.loginError ? `<small class="upd-err">${esc(state.loginError)}</small>` : ""}</div>
+          <div class="ctl"><button class="btn primary" data-dl="login-start">登录…</button></div></div>`}
+    </div>` : ""}
+    <div class="group"><div class="gh">${api.loginStart ? "添加账号 · 用浏览器登录（登录窗口用不了时）" : "添加账号 · 用浏览器登录"}</div>
       ${o ? `<div class="dl-steps">
-          <div><b>1</b><span>已经用浏览器打开了 Pixiv 的登录页。没打开的话 <button class="linkbtn" data-dl="oauth-open">再打开一次</button>。</span></div>
-          <div><b>2</b><span>登录后页面会停在空白页或显示打不开，这是正常的。把此时地址栏里以 <span class="mono">pixiv://</span> 开头的完整地址复制下来。<br>看不到的话：按 F12 打开开发者工具 → 网络（Network）→ 找到 <span class="mono">callback?…code=</span> 那一行，复制它的地址。</span></div>
-          <div><b>3</b><span>粘贴到这里：</span></div>
+          <div><b>1</b><span>已经用浏览器打开了 Pixiv 的登录页（没打开的话 <button class="linkbtn" data-dl="oauth-open">再打开一次</button>）。<b>先不要登录。</b></span></div>
+          <div><b>2</b><span>在那个页面按 <span class="kbd">F12</span> 打开开发者工具，切到“网络 / Network”，勾选“保留日志 / Preserve log”，并在筛选框里输入 <span class="mono">callback?</span></span></div>
+          <div><b>3</b><span>现在登录。登录后页面会变成空白，这是正常的。网络列表里会出现一行 <span class="mono">callback?state=…&amp;code=…</span>，点它，把完整的请求地址（Request URL）复制下来。</span></div>
+          <div><b>4</b><span>粘贴到这里：</span></div>
         </div>
-        <div class="dl-form"><label>回调地址或 code<input data-f="oauth-cb" id="dl-oauth-cb" placeholder="pixiv://account/login?code=…" autocomplete="off" spellcheck="false"></label>
+        <div class="dl-form"><label>回调地址或 code<input data-f="oauth-cb" id="dl-oauth-cb" placeholder="https://app-api.pixiv.net/web/v1/users/auth/pixiv/callback?state=…&amp;code=…" autocomplete="off" spellcheck="false"></label>
           <label>账号名（可选）<input data-f="oauth-name" id="dl-oauth-name" placeholder="留空则用 Pixiv 昵称"></label></div>
         <div class="dl-actions"><button class="btn primary" data-dl="oauth-finish" ${state.busy === "oauth" ? "disabled" : ""}>${state.busy === "oauth" ? "正在验证…" : "完成添加"}</button><button class="btn ghost" data-dl="oauth-cancel">取消</button></div>`
-        : `<div class="set"><div class="t">用浏览器登录 Pixiv<small>会打开 Pixiv 官方登录页，登录后把回调地址粘贴回来。密码只在 Pixiv 的页面里输入。</small></div><div class="ctl"><button class="btn primary" data-dl="oauth-start">开始</button></div></div>`}
+        : `<div class="set"><div class="t">用浏览器登录 Pixiv<small>在你自己的浏览器里登录，再把登录后产生的一个地址复制回来。步骤多一些，需要用到浏览器的开发者工具。</small></div><div class="ctl"><button class="btn ${api.loginStart ? "" : "primary"}" data-dl="oauth-start">开始</button></div></div>`}
     </div>
     <div class="group"><div class="gh">添加账号 · 已有 refresh token</div>
       <div class="dl-form"><label>账号名<input data-f="tok-name" id="dl-tok-name" placeholder="给这个账号起个名字" autocomplete="off"></label>
@@ -461,8 +470,8 @@ export function initDownloader(ctx) {
   const PROXY_MODES = [["system", "跟随系统设置"], ["custom", "自定义"], ["none", "不使用代理"]];
   const PROXY_HINTS = {
     system: "使用 Windows 里设置的代理；系统没有设置代理时直接连接。",
-    custom: "只有这个软件访问 Pixiv 时走下面填的代理，不影响其他程序，也不影响连接保存位置。",
-    none: "直接连接 Pixiv，即使系统设置了代理也不用。",
+    custom: "只有这个软件访问 Pixiv 时走下面填的代理，不影响其他程序，也不影响连接保存位置。登录账号的窗口要重启软件后才会用上新设置。",
+    none: "直接连接 Pixiv，即使系统设置了代理也不用。登录账号的窗口要重启软件后才会用上新设置。",
   };
   function proxyGroup(row) {
     const mode = val("PROXY_MODE") || "system", t = state.ptest;
@@ -613,6 +622,15 @@ export function initDownloader(ctx) {
       state.oauth = r; api.openUrl(r.url); return draw();
     }
     if (act === "oauth-open") return void api.openUrl(state.oauth.url);
+    if (act === "login-start") {
+      state.loginError = "";
+      const r = await api.loginStart("");
+      if (!r || !r.ok) { state.loginError = (r && r.error) || "登录窗口没能打开"; return draw(); }
+      state.login = { status: r.status || "waiting" };
+      draw();
+      return pollLogin();
+    }
+    if (act === "login-cancel") { await api.loginCancel(); state.login = null; return draw(); }
     if (act === "oauth-cancel") { state.oauth = null; return draw(); }
     if (act === "oauth-finish") {
       const callback = $("#dl-oauth-cb").value.trim(), name = $("#dl-oauth-name").value.trim();
@@ -740,6 +758,24 @@ export function initDownloader(ctx) {
     if (t.dataset.dlnum) { state.form[t.dataset.dlnum] = t.value === "" ? "" : +t.value; syncSave(); }
     if (t.dataset.dlpair) { const [k, i] = t.dataset.dlpair.split(":"); const v = [...(val(k) || [0, 0])]; v[+i] = +t.value; state.form[k] = v; syncSave(); }
   });
+  // 登录窗口开着的时候，隔一会儿问一次进行到哪了
+  async function pollLogin() {
+    while (state.login) {
+      await new Promise((r) => setTimeout(r, 600));
+      if (!state.login) return;
+      const r = await api.loginStatus();
+      const status = (r && r.status) || "error";
+      if (status === "waiting" || status === "finishing") {
+        if (status !== state.login.status) { state.login.status = status; if (isOpen() && state.page === "accounts") draw(); }
+        continue;
+      }
+      state.login = null;
+      if (status === "done") { toast(`已添加账号 ${r.name || ""}`); if (isOpen() && state.page === "accounts") go("accounts"); return; }
+      state.loginError = status === "cancelled" ? "" : (r && r.message) || "没能完成登录";
+      if (isOpen() && state.page === "accounts") draw();
+      return;
+    }
+  }
   // 输入过程中不整页重画（会打断输入），只更新“保存”按钮能不能点
   function syncSave() {
     const b = scrim.querySelector('[data-dl="save"]'); if (!b) return;

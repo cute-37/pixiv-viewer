@@ -56,6 +56,10 @@ def main() -> int:
     server = MediaServer(token, api._allowed, api=api, avatar=api._avatar_path)
     server.start()
 
+    # 登录 Pixiv 的窗口要和下载用同一个代理；内置浏览器的代理只能在开第一个窗口之前定下来
+    from webapp.login_window import apply_browser_proxy
+    apply_browser_proxy(api._downloader_home() / "settings.json")
+
     window = webview.create_window(
         APP_NAME, server.url + "/index.html", js_api=api,
         width=1440, height=900, min_size=(900, 600), background_color="#FFFFFF", text_select=False,

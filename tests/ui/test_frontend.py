@@ -326,3 +326,36 @@ def test_proxy_test_reports_failure_and_missing_address(page):
     page.click("[data-dl=test-proxy]")
     page.wait_for_selector(".dl-test.bad")
     assert "代理地址" in page.locator(".dl-test").inner_text()
+
+
+# ---------------- 添加账号：登录窗口（模拟后端过几秒“登录成功”） ----------------
+def open_accounts(page):
+    page.click("#btn-settings")
+    page.click(".dnav [data-page=dl-accounts]")
+    page.wait_for_selector("[data-dl=login-start]")
+
+
+def test_login_window_flow(page):
+    open_accounts(page)
+    page.click("[data-dl=login-start]")
+    page.wait_for_selector("[data-dl=login-cancel]")
+    assert "弹出的窗口" in page.locator("#dl-page").inner_text()
+    page.wait_for_selector("[data-dl=login-start]", timeout=10000)        # 完成后回到初始状态
+    assert "已添加账号" in page.locator("#toast-t").inner_text()
+
+
+def test_login_window_cancel(page):
+    open_accounts(page)
+    page.click("[data-dl=login-start]")
+    page.click("[data-dl=login-cancel]")
+    page.wait_for_selector("[data-dl=login-start]")
+    page.wait_for_timeout(1200)
+    assert page.locator(".upd-err").count() == 0                          # 自己取消的不算出错
+
+
+def test_manual_login_instructions_mention_preserve_log(page):
+    open_accounts(page)
+    page.click("[data-dl=oauth-start]")
+    text = page.locator(".dl-steps").inner_text()
+    assert "先不要登录" in text and "保留日志" in text and "callback?" in text
+    assert "地址栏" not in text                                           # 地址栏里不会出现要找的那个地址

@@ -117,6 +117,7 @@ let folderSeq = 2;
 const FOLDERS = [{ id: 1, name: "风景", artists: ARTISTS.slice(0, 3).map((a) => a.key) }, { id: 2, name: "常看", artists: ARTISTS.slice(4, 6).map((a) => a.key) }];
 
 let updState = { state: "idle", done: 0, total: 0, error: "" };
+let mockLogin = null;
 
 export const mock = {
   isMock: true,
@@ -220,6 +221,15 @@ export const mock = {
   async removeFolder() { return true; },
   async reveal() { return "preview"; },
   async openExternal() { return "preview"; },
+  // 登录窗口：预览版里假装过几秒登录成功
+  async loginStart() { mockLogin = { status: "waiting", at: Date.now() }; return { ok: true, status: "waiting" }; },
+  async loginStatus() {
+    if (!mockLogin) return { ok: true, status: "idle" };
+    const age = Date.now() - mockLogin.at;
+    if (mockLogin.status === "cancelled") return { ok: true, status: "cancelled" };
+    return { ok: true, status: age > 2400 ? "done" : age > 1500 ? "finishing" : "waiting", name: "示例账号" };
+  },
+  async loginCancel() { if (mockLogin) mockLogin.status = "cancelled"; return { ok: true, status: "cancelled" }; },
   // 软件更新：预览版里演示一遍流程，不会真的下载或替换
   async updateCheck() { await new Promise((r) => setTimeout(r, 500)); updState = { state: "idle", done: 0, total: 67 * 1048576, error: "" }; return { ok: true, current: "预览", latest: "9.9.9", newer: true, size: 67 * 1048576, canApply: true, reason: "", page: "https://github.com/", notes: "- 示例：这里显示这一版的更新记录\n- 预览版不会真的更新" }; },
   async updateStart() { updState.state = "downloading"; updState.done = 0; const t = setInterval(() => { if (updState.state !== "downloading") return clearInterval(t); updState.done = Math.min(updState.total, updState.done + updState.total / 12); if (updState.done >= updState.total) { updState.state = "ready"; clearInterval(t); } }, 250); return { ok: true, ...updState }; },

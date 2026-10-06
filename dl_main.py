@@ -29,6 +29,8 @@ HOME = Path(os.environ.get("PIXIV_DL_HOME") or (APP_DIR / "data" / ("" if FROZEN
 os.environ["PIXIV_DL_HOME"] = str(HOME)                       # 必须在导入 pixiv_dl 之前
 os.environ.setdefault("PIXIV_VIEWER_DATA_DIR", str(HOME))     # 不让公共模块把日志写到程序文件夹里
 
+from webapp.login_window import LoginMixin  # noqa: E402  （只用标准库，不受上面环境变量影响）
+
 PENDING = HOME / "import-pending.json"                        # 上次没能立即导入、留到这次启动时做的文件
 
 BOOT = b'<script>window.__PV_DESKTOP__=true;window.__PV_TOKEN__="";</script>\n<script type="module"'
@@ -63,7 +65,7 @@ class StaticHandler(BaseHTTPRequestHandler):
             pass
 
 
-class DlApi:
+class DlApi(LoginMixin):
     """给界面用的接口。pywebview 会把不以下划线开头的方法暴露给网页。"""
 
     def __init__(self) -> None:
@@ -225,6 +227,8 @@ def main() -> int:
         finally:
             PENDING.unlink(missing_ok=True)
     api = DlApi()
+    from webapp.login_window import apply_browser_proxy
+    apply_browser_proxy(HOME / "settings.json")      # 登录窗口和下载用同一个代理
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), StaticHandler)
     httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, name="ui-files", daemon=True).start()
