@@ -46,6 +46,7 @@ export const DEFAULTS = {
   sidew: 228, infow: 300, shadow: 0.5,
   layout: "uniform", ratio: "4 / 5", caption: "hover", status: "off", tagchips: "on",
   badges: "on", mergePages: true, groupByMonth: true, hoverPreview: true, sidebarCollapsed: false,
+  closeAction: "ask",       // 关闭窗口时：ask 每次询问 / tray 放到托盘 / exit 直接退出
   showR18: false, openFolders: [],   // R18 内容默认不显示，要在设置里打开
   // 看图
   infoOpen: true, viewerBg: "canvas", doubleClick: "fit", wheel: "zoom", fitOnOpen: true, preload: true,

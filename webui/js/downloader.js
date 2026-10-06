@@ -452,6 +452,9 @@ export function initDownloader(ctx) {
       ${i.viewerKinds ? `<div class="set"><div class="t"><small>评分、自定义标签、收藏、最近查看只保存在本机，Pixiv 上没有，不导入就无法补回。账号与下载设置不导入的话，重新登录、重新设置即可。</small></div></div>`
         : `<div class="set"><div class="t"><small>账号与下载设置不导入的话，重新登录、重新设置即可。</small></div></div>`}
     </div>
+    ${solo && ctx.setSetting ? `<div class="group"><div class="gh">窗口</div>
+      <div class="set"><div class="t">关闭窗口时<small>放到托盘后程序继续在后台运行，下载不会中断；点托盘里的图标回来，右键可以退出。</small></div>
+        <div class="ctl"><div class="seg">${[["ask", "每次询问"], ["tray", "放到托盘"], ["exit", "直接退出"]].map(([v, l]) => `<button data-dlclose-pref="${v}" class="${(ctx.S.closeAction || "ask") === v ? "on" : ""}">${l}</button>`).join("")}</div></div></div></div>` : ""}
     <div class="group"><div class="gh">说明</div><div class="dl-about">
       ${solo ? `<p>想换电脑或备份，把数据文件夹整个拷走即可；想恢复成全新状态，关闭程序后删掉它。里面的 settings.json 含有登录凭证，不要发给别人。</p>`
         : `<p>下载在后台以独立的进程运行，下载再忙也不影响看图，也不占用网络端口；关闭查看器时会处理完当前文件再退出。</p>`}
@@ -483,6 +486,8 @@ export function initDownloader(ctx) {
     const br = t.closest("[data-dlbrowse]");
     if (br) { const [share, path] = br.dataset.dlbrowse.split("|"); return browse(share || "", path ? path.split("/").filter(Boolean) : []); }
     if (tasks.toggle(t)) return;
+    const cp = t.closest("[data-dlclose-pref]");
+    if (cp) { ctx.setSetting({ closeAction: cp.dataset.dlclosePref }); return draw(); }
     const b = t.closest("[data-dl]"); if (!b || b.disabled) return;
     const act = b.dataset.dl;
     if (act === "reload") return go(state.page);

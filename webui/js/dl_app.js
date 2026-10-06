@@ -13,9 +13,10 @@ async function boot() {
   const api = await connect();
   const S = normalize(await api.getConfig());
   applySettings(S);
-  const ctx = { api, S, standalone: true, view: {}, closeDialog() {}, reloadLibrary: async () => {}, loadWorks() {} };
+  const ctx = { api, S, standalone: true, view: {}, closeDialog() {}, reloadLibrary: async () => {}, loadWorks() {},
+    setSetting(patch) { Object.assign(S, patch); api.saveConfig(S); } };
   initDownloader(ctx);
-  initWindowControls(api, ".dhead, .dnav .dt, [data-drag]");
+  initWindowControls(api, ".dhead, .dnav .dt, [data-drag]", { get: () => S.closeAction, set: (v) => ctx.setSetting({ closeAction: v }) });
   await ctx.openDownloader("update");
 }
 // 启动失败时把原因显示出来，而不是留一个空白窗口

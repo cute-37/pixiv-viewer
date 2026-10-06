@@ -49,6 +49,14 @@ def main() -> int:
     from webapp.api import Api
     from webapp.server import MediaServer
 
+    # 同一份数据只开一个程序：已经开着（多半是在托盘里）就把它的窗口叫出来，自己退出
+    from utils.constants import DATA_DIR
+    from webapp.tray import SingleInstance
+    instance = SingleInstance("PixivViewer", DATA_DIR)
+    if not instance.acquire():
+        logger.info("已经有一个在运行，已通知它显示窗口")
+        return 0
+
     cm = get_config_manager()
     cm.load()
     token = secrets.token_urlsafe(24)
@@ -66,6 +74,9 @@ def main() -> int:
         frameless=True, easy_drag=False,   # 标题栏由界面自己画（webui 里的 .winctl），见 webapp/chrome.py
     )
     api._window = window
+
+    api._init_close("Pixiv Viewer", Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "webui" / "app.ico")
+    instance.watch(lambda: api._tray.restore())
 
     def on_shown():
         from webapp import chrome

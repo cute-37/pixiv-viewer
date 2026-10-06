@@ -120,7 +120,8 @@ async function boot() {
   initHover(ctx);
   initDownloader(ctx);
   if (!ctx.api.dl) $("#btn-dl").hidden = true;
-  initWindowControls(ctx.api, ".head, .vhead, .brand, .rail-logo, [data-drag]");
+  initWindowControls(ctx.api, ".head, .vhead, .brand, .rail-logo, [data-drag]",
+    { get: () => ctx.S.closeAction, set: (v) => ctx.setSetting({ closeAction: v }) });
   syncChrome();
   const last = ctx.S.rememberLast && ctx.S.lastScope;
   if (last && (last.scope !== "artist" || ctx.artistByKey(last.artist)) && (last.scope !== "folder" || folderById(last.folder))) {

@@ -31,6 +31,7 @@ from .downloader import DownloaderBridge, DownloaderData, DownloaderError, resol
 from .library import DEFAULT_AR, Artist, LibraryIndex, Work
 from .login_window import LoginMixin
 from .store import WebStore
+from .tray import CloseMixin
 from .updater import UpdateApiMixin, Updater
 
 logger = get_logger("WebApi")
@@ -73,7 +74,7 @@ def _month(ts: float) -> str:
     return f"{d.year}-{d.month:02d}"
 
 
-class Api(UpdateApiMixin, LoginMixin):
+class Api(UpdateApiMixin, LoginMixin, CloseMixin):
     def __init__(self, config_manager, reader, database, store: Optional[WebStore] = None, token: str = "") -> None:
         self._cm = config_manager
         self._reader = reader
@@ -723,7 +724,8 @@ class Api(UpdateApiMixin, LoginMixin):
     def window_action(self, action):
         """minimize / toggle（最大化与还原）/ close / drag / state；返回窗口当前是否最大化"""
         from . import chrome
-        return chrome.window_action(self._window, str(action))
+        handled = self._window_close_action(str(action))      # close / tray / restore（见 webapp/tray.py）
+        return handled if handled is not None else chrome.window_action(self._window, str(action))
 
     def my_tag_list(self):
         return self._db.get_all_tags()

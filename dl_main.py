@@ -30,6 +30,7 @@ os.environ["PIXIV_DL_HOME"] = str(HOME)                       # 必须在导入 
 os.environ.setdefault("PIXIV_VIEWER_DATA_DIR", str(HOME))     # 不让公共模块把日志写到程序文件夹里
 
 from webapp.login_window import LoginMixin  # noqa: E402  （只用标准库，不受上面环境变量影响）
+from webapp.tray import CloseMixin, SingleInstance  # noqa: E402
 
 PENDING = HOME / "import-pending.json"                        # 上次没能立即导入、留到这次启动时做的文件
 
@@ -65,7 +66,7 @@ class StaticHandler(BaseHTTPRequestHandler):
             pass
 
 
-class DlApi(LoginMixin):
+class DlApi(LoginMixin, CloseMixin):
     """给界面用的接口。pywebview 会把不以下划线开头的方法暴露给网页。"""
 
     def __init__(self) -> None:
@@ -210,7 +211,8 @@ class DlApi(LoginMixin):
 
     def window_action(self, action):
         from webapp import chrome
-        return chrome.window_action(self._window, str(action))
+        handled = self._window_close_action(str(action))
+        return handled if handled is not None else chrome.window_action(self._window, str(action))
 
     def _shutdown(self) -> None:
         """关闭窗口时：让正在跑的任务处理完当前文件再停"""
@@ -228,6 +230,9 @@ def main() -> int:
         print("缺少 pywebview：请先运行  pip install pywebview", file=sys.stderr)
         return 1
     HOME.mkdir(parents=True, exist_ok=True)
+    instance = SingleInstance("PixivDownloader", HOME)
+    if not instance.acquire():
+        return 0
     if PENDING.is_file():
         # 在打开数据库之前，把上次安排好的导入做完
         try:
@@ -259,6 +264,8 @@ def main() -> int:
         frameless=True, easy_drag=False,
     )
     api._window = window
+    api._init_close("Pixiv 下载器", icon)
+    instance.watch(lambda: api._tray.restore())
 
     def on_shown():
         from webapp import chrome

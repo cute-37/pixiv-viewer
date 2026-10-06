@@ -102,3 +102,14 @@
 .upd-err { color: #d6336c; }
 .upd-notes { margin: 0 calc(var(--gap) * 1.5) var(--gap); padding: var(--gap) calc(var(--gap) * 1.25); border-radius: var(--radius); background: var(--sunken); color: var(--text-2); font-size: calc(var(--fs) - 1px); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; }
 .upd-notes b { display: block; color: var(--text); margin-bottom: 2px; }
+/* 关闭窗口时的询问（winctl.js） */
+.closeask { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgb(0 0 0 / .32); }
+.closeask-card { width: min(440px, calc(100vw - 32px)); padding: calc(var(--gap) * 2.25); border-radius: calc(var(--radius) + 5px); background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 24px 60px -20px rgb(var(--shadow-rgb) / .55); }
+.closeask-card h3 { margin: 0 0 6px; font: 700 calc(var(--fs) + 4px) var(--font-head); }
+.closeask-card p { margin: 0 0 calc(var(--gap) * 1.5); color: var(--text-2); line-height: 1.6; }
+.closeask-remember { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: calc(var(--gap) * 1.75); cursor: pointer; }
+.closeask-remember input { accent-color: var(--accent); align-self: center; }
+.closeask-remember small { color: var(--text-3); }
+.closeask-actions { display: flex; align-items: center; gap: var(--gap); }
+.closeask-actions .sp { flex: 1; }

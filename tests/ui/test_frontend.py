@@ -1,6 +1,8 @@
 """前端关键流程：网格、看图页、侧边栏文件夹、设置。全部走真实的鼠标 / 键盘事件。"""
 import re
 
+import pytest
+
 
 def folder(page, name):
     return page.locator("#artists [data-folder]", has_text=name).first
@@ -465,3 +467,69 @@ def test_failed_files_list_and_retry_now(page):
     page.locator("[data-dl=retry-now][data-kinds=network]").click()      # 马上重试这一组：直接开始下载
     page.wait_for_selector(".dl-run-card")
     assert "重试失败的文件" in page.locator(".dl-run-card").inner_text()
+
+
+# ---------------- 关闭窗口：询问、记住选择、设置 ----------------
+@pytest.fixture
+def desktop_page(browser, base_url):
+    """装作桌面窗口（显示右上角的窗口按钮）；window.__pvLastWindowAction 记下界面让窗口做了什么"""
+    context = browser.new_context(viewport={"width": 1280, "height": 800})
+    context.route("**/fonts.g*/**", lambda route: route.abort())
+    pg = context.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.goto(f"{base_url}/index.html?works=60&desktop=1")
+    pg.wait_for_selector("#grid-root .tile")
+    pg.wait_for_selector("#winctl:not([hidden])")
+    yield pg
+    context.close()
+    assert not errors, f"页面脚本报错: {errors}"
+
+
+def last_action(pg):
+    return pg.evaluate("window.__pvLastWindowAction || null")
+
+
+def test_close_asks_and_can_be_cancelled(desktop_page):
+    pg = desktop_page
+    pg.click("#winctl [data-win=close]")
+    pg.wait_for_selector(".closeask")
+    assert "托盘" in pg.locator(".closeask").inner_text() and "记住我的选择" in pg.locator(".closeask").inner_text()
+    pg.keyboard.press("Escape")
+    pg.wait_for_selector(".closeask", state="detached")
+    assert last_action(pg) is None                                # 取消：什么都不做
+    pg.click("#winctl [data-win=close]")
+    pg.click(".closeask [data-choice=tray]")
+    pg.wait_for_function("window.__pvLastWindowAction === 'tray'")
+    pg.click("#winctl [data-win=close]")                          # 没勾“记住”：下次还问
+    pg.wait_for_selector(".closeask")
+    pg.click(".closeask [data-choice=exit]")
+    pg.wait_for_function("window.__pvLastWindowAction === 'close'")
+
+
+def test_close_choice_is_remembered_and_editable_in_settings(desktop_page):
+    pg = desktop_page
+    pg.click("#winctl [data-win=close]")
+    pg.check(".closeask-remember input")
+    pg.click(".closeask [data-choice=tray]")
+    pg.wait_for_function("window.__pvLastWindowAction === 'tray'")
+    pg.evaluate("window.__pvLastWindowAction = null")
+    pg.click("#winctl [data-win=close]")                          # 记住了：不再询问，直接放到托盘
+    pg.wait_for_function("window.__pvLastWindowAction === 'tray'")
+    assert pg.locator(".closeask").count() == 0
+    pg.click("#btn-settings")
+    pg.click(".dnav [data-page=library]")
+    seg = pg.locator("[data-set=closeAction]")
+    assert "on" in seg.locator("[data-v=tray]").get_attribute("class")
+    seg.locator("[data-v=ask]").click()                           # 在设置里改回“每次询问”
+    pg.keyboard.press("Escape")
+    pg.click("#winctl [data-win=close]")
+    pg.wait_for_selector(".closeask")
+
+
+def test_close_request_from_system_goes_through_the_same_prompt(desktop_page):
+    pg = desktop_page
+    pg.evaluate("void window.__pvRequestClose()")                    # 从任务栏 / Alt+F4 关窗口时后端调用的入口
+    pg.wait_for_selector(".closeask")
+    pg.evaluate("void window.__pvRequestClose()")                    # 连着触发两次也只有一个询问框
+    assert pg.locator(".closeask").count() == 1

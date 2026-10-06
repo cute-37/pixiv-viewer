@@ -149,7 +149,10 @@ export function initDialogs(ctx) {
           `为了翻页快，看过的图片会存一份小图在本机。${lib.cache?.maxBytes ? `超过 ${fmtSize(lib.cache.maxBytes)} 或 ${lib.cache.maxAgeDays} 天没用到的部分，会在下次启动时自动清掉。` : ""}清空不会影响任何图片，之后浏览时会重新生成。`,
           ctx.api.clearCache ? `<button class="btn" data-act="clear-cache" ${lib.cache?.size ? "" : "disabled"}>清空</button>` : ""),
       ]),
-      group("启动", [row("打开上次浏览的位置", "", sw("rememberLast"))]),
+      group("启动与关闭", [
+        row("打开上次浏览的位置", "", sw("rememberLast")),
+        ...(ctx.api.windowAction ? [row("关闭窗口时", "放到托盘后程序继续在后台运行，下载不会中断；点托盘里的图标回来，右键可以退出。", seg("closeAction", [["ask", "每次询问"], ["tray", "放到托盘"], ["exit", "直接退出"]]))] : []),
+      ]),
     ].join("");
   }
   function keys() {

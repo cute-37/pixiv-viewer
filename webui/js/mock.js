@@ -222,6 +222,8 @@ export const mock = {
   async removeFolder() { return true; },
   async reveal() { return "preview"; },
   async openExternal() { return "preview"; },
+  // 预览版里没有真的窗口。地址里带 ?desktop 时装作有（显示窗口按钮），用来演示和测试“关闭时询问”
+  ...(new URLSearchParams(location.search).has("desktop") ? { async windowAction(action) { if (action === "tray" || action === "close") window.__pvLastWindowAction = action; return false; } } : {}),
   async saveText(name) { return "D:\\导出\\" + name; },
   async clearCache() { const freed = mockCacheSize; mockCacheSize = 0; return { removed: 4321, freed }; },
   // 登录窗口：预览版里假装过几秒登录成功
