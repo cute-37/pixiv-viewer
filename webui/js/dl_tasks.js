@@ -216,7 +216,16 @@ export function createTasks(D) {
     if (!checkedOnly && job.bytes) nums.push(`<span>${fmtSize(job.bytes)}</span>`);
     const notes = [];
     if (res.needs_review) notes.push(`<div class="dl-hintrow strong">${icon("info")}<span>新发现的文件比较多，还没有开始下载。先看看都是谁的，再决定下哪些。</span><button class="btn primary" data-dl="review">查看并选择</button></div>`);
-    if (failedArtists.length) notes.push(`<div class="dl-hintrow">${icon("warn")}<span><b>${fmtNum(failedArtists.length)}</b> 位画师检查失败：${failedArtists.slice(0, 4).map(([, v]) => esc(v.name || "?")).join("、")}${failedArtists.length > 4 ? " 等" : ""}</span><button class="btn" data-dl="ask-failed">重查这些</button><button class="btn ghost" data-dl="fail-tab" data-tab="artists">查看原因</button></div>`);
+    const avatarJob = job.kind === "download_avatars";
+    if (avatarJob) {
+      nums.length = 0;
+      nums.push(`<span>下载了 <b>${fmtNum(job.success || 0)}</b> 个头像</span>`);
+      if (job.failed) nums.push(`<span class="bad">没成功 ${fmtNum(job.failed)} 个</span>`);
+      if (res.not_done) nums.push(`<span>还有 ${fmtNum(res.not_done)} 个没轮到</span>`);
+      if (failedArtists.length) notes.push(`<div class="dl-hintrow">${icon("warn")}<span>这些画师的头像没下载成功，再试一次就会接着补（已经有的不会重下）。</span><button class="btn" data-dl="fill-avatars">再试一次</button></div>
+        <div class="dl-tasklist">${failedArtists.slice(0, 200).map(([id, v]) => `<div class="dl-task"><div class="t"><b>${esc(v.name || "画师 " + id)}</b><span class="by">ID ${esc(id)}</span>${v.note ? `<small class="mono">${esc(v.note)}</small>` : ""}</div></div>`).join("")}</div>`);
+    }
+    else if (failedArtists.length) notes.push(`<div class="dl-hintrow">${icon("warn")}<span><b>${fmtNum(failedArtists.length)}</b> 位画师检查失败：${failedArtists.slice(0, 4).map(([, v]) => esc(v.name || "?")).join("、")}${failedArtists.length > 4 ? " 等" : ""}</span><button class="btn" data-dl="ask-failed">重查这些</button><button class="btn ghost" data-dl="fail-tab" data-tab="artists">查看原因</button></div>`);
     if (res.unchecked) notes.push(`<div class="dl-hintrow">${icon("warn")}<span>账号被限速太久，还有 <b>${fmtNum(res.unchecked)}</b> 位画师这次没查到（不算失败）。过一会儿可以接着查。</span><button class="btn" data-dl="ask-resume">接着查</button></div>`);
     if (res.following_incomplete) notes.push(`<div class="dl-hintrow">${icon("warn")}<span>关注列表没有读全：${esc(res.following_incomplete)}。没读到的画师已按以前的记录补上，但新关注的可能漏了。</span></div>`);
     const partial = Object.values(d.partial || {});

@@ -113,3 +113,11 @@
 .closeask-remember small { color: var(--text-3); }
 .closeask-actions { display: flex; align-items: center; gap: var(--gap); }
 .closeask-actions .sp { flex: 1; }
+/* 快捷键设置：可以点的按键 */
+.keys.edit .kb { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.keys.edit .kb small { color: var(--text-3); font-size: calc(var(--fs) - 2px); }
+button.kbd.key { cursor: pointer; background: var(--surface); font: inherit; font-family: var(--mono); font-size: 10px; height: 19px; min-width: 22px; }
+button.kbd.key:hover { border-color: var(--accent); color: var(--accent); }
+button.kbd.key.add { color: var(--text-3); border-style: dashed; }
+.kbd.key.wait { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); line-height: 17px; }
+.keys.edit .kb { justify-content: flex-end; }

@@ -447,8 +447,9 @@ export function initDownloader(ctx) {
           <small>${esc(r.message || (r.ok ? "已导入" : "没有成功"))}${r.kept ? `<br>原来的那份保留在：<span class="mono">${esc(r.kept)}</span>` : ""}</small></div></div>`).join("")}</div>` : ""}
     </div>
     <div class="group"><div class="gh">之后再补</div>
-      <div class="set"><div class="t">补全头像<small>没有导入头像，或者有新关注的画师时，从 Pixiv 把缺少的头像下载回来。</small></div>
-        <div class="ctl"><button class="btn" data-dl="fill-avatars" ${have("works_db") ? "" : "disabled"}>补全头像…</button></div></div>
+      <div class="set"><div class="t">画师头像${files.avatars && files.avatars.detail ? ` · 现有 ${esc(files.avatars.detail)}` : ""}<small>“补全”只下载头像文件夹里还没有的；“全部重新下载”把所有画师的头像都换成最新的。平时检查更新时也会顺带把缺的和换过的头像下回来。</small></div>
+        <div class="ctl"><button class="btn" data-dl="fill-avatars" ${have("works_db") ? "" : "disabled"}>补全缺少的…</button>
+          <button class="btn ghost" data-dl="fill-avatars" data-all="1" ${have("works_db") ? "" : "disabled"}>全部重新下载…</button></div></div>
       ${i.viewerKinds ? `<div class="set"><div class="t"><small>评分、自定义标签、收藏、最近查看只保存在本机，Pixiv 上没有，不导入就无法补回。账号与下载设置不导入的话，重新登录、重新设置即可。</small></div></div>`
         : `<div class="set"><div class="t"><small>账号与下载设置不导入的话，重新登录、重新设置即可。</small></div></div>`}
     </div>
@@ -609,7 +610,9 @@ export function initDownloader(ctx) {
       return draw();
     }
     if (act === "fill-avatars") {
-      const c = { kind: "download_avatars", title: "补全头像", text: "从 Pixiv 下载缺少的画师头像。会访问 Pixiv，头像多的时候要花一些时间，可以随时停止。" };
+      const all = b.dataset.all === "1";
+      const c = all ? { kind: "download_avatars", simple: true, params: { all: true }, title: "重新下载全部头像", text: "把所有画师的头像重新下载一遍（画师换过头像时用）。会访问 Pixiv，画师多的时候要花一些时间，可以随时暂停或停止。" }
+        : { kind: "download_avatars", simple: true, title: "补全头像", text: "下载头像文件夹里还没有的画师头像。会访问 Pixiv，可以随时暂停或停止；没成功的再点一次就会接着补。" };
       if (solo) { mount("update"); state.confirm = c; return; }
       return void ctx.openDownloader("update").then(() => { state.confirm = c; draw(); });
     }

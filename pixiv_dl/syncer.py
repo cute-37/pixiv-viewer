@@ -170,6 +170,7 @@ class SyncMixin:
             clients = {n: c for n, c in clients.items() if n in set(accounts)}
         if not clients:
             raise RuntimeError("没有可用的账号（请先在「账号」页添加并确认 Token 有效）")
+        self._avatar_have = None              # 头像文件夹的情况每次检查重新看一遍
         job.set(phase="获取画师列表")
         artists, main_client, incomplete = self._collect_artists(db, clients, aid, aids, scope, stale_days)
         states = db.artist_sync_states()
@@ -340,6 +341,7 @@ class SyncMixin:
             author_comment=ref.comment, is_followed=ref.is_followed or None,
             is_private_follow=ref.private if ref.is_followed or ref.private else None,
             is_temp_name=is_temp, is_deleted=0)
+        self._sync_avatar(db, aid, ref.profile_image, (existing or {}).get('profile_image_url'))
         try:
             # 画师改名时同步重命名存储目录；临时名绝不触发重命名
             self.storage.get_artist_folder(aid, self._safe(name), rename=not is_temp)
@@ -363,6 +365,24 @@ class SyncMixin:
             found['files'] += self._sync_novels(client, db, aid, found)
         found['name'] = name
         return found
+
+    def _sync_avatar(self, db, aid, url, old_url):
+        """检查时顺带保持头像是新的：本地没有，或者画师换了头像，就下载。失败不影响检查。"""
+        if not url:
+            return
+        try:
+            have = getattr(self, '_avatar_have', None)
+            if have is None:
+                have = self._avatar_have = self.avatar_ids()
+            changed = bool(old_url) and old_url != url
+            if aid in have and not changed:
+                return
+            path = self.download_artist_avatar(aid, url, force=changed)
+            if path:
+                have.add(aid)
+                db.upsert_artist(aid, None, profile_image_local=path)
+        except Exception as e:
+            logger.debug(f"下载画师 {aid} 头像失败（不影响检查）: {e}")
 
     def _scan_type(self, client, db, aid, typ, watermark, first_call, found=None, mark=None):
         """扫描画师某一类作品，返回遇到的最大新作品 ID。API 出错抛 SyncFailed/ArtistGone。

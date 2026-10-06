@@ -367,3 +367,123 @@ def test_stop_while_paused_ends_the_job(stocked):
     pro.download()
     assert pro.job.status == 'cancelled'
     assert 0 < sum(1 for v in statuses(db).values() if v == 1) < 7
+
+
+# ================================================================ 头像
+def avatar_setup(cfg, with_file_for=()):
+    import os
+    api = api_with({10: ('Alice', [105]), 20: ('Bob', [205]), 30: ('Carol', [305])})
+    routes = {f'https://stored.example/avatar/{a}.png': BLOB for a in (10, 20)}
+    routes['https://fresh.example/avatar/30.png'] = BLOB                 # Carol 只有向接口现取的地址能用
+    pro, _ = make_processor(api, routes)
+    db = Database.local(cfg.DB_PATH)
+    for aid, name in ((10, 'Alice'), (20, 'Bob'), (30, 'Carol')):
+        # 数据库是导入的：记录里写着本地有头像，实际上头像文件夹是空的
+        db.upsert_artist(aid, name, profile_image_local=f'avatars/{aid}.png',
+                         profile_image_url=f'https://stored.example/avatar/{aid}.png' if aid != 30 else 'https://stale.example/30.png')
+    os.makedirs(cfg.AVATARS_PATH, exist_ok=True)
+    for aid in with_file_for:
+        with open(os.path.join(cfg.AVATARS_PATH, f'{aid}.png'), 'wb') as f:
+            f.write(BLOB)
+    return pro, api, db
+
+
+def test_missing_avatars_are_judged_by_files_not_database_records(cfg, no_sleep):
+    pro, api, db = avatar_setup(cfg, with_file_for=(10,))
+    assert pro.avatar_ids() == {10}
+    pro.download_missing_avatars()
+    assert pro.avatar_ids() == {10, 20, 30}
+    assert pro.job.total == 2 and pro.job.success == 2 and pro.job.failed == 0
+    assert 'https://stored.example/avatar/10.png' not in pro.session.requested      # 已经有的不重下
+    # 地址还能用的直接下载，不占接口请求；只有地址失效的那位才去问了一次接口
+    assert [c for c in api.calls if c[0] == 'user_detail'] == [('user_detail', 30)]
+
+
+def test_avatar_failures_are_listed_and_retry_picks_them_up(cfg, no_sleep):
+    pro, api, db = avatar_setup(cfg)
+    del pro.session.routes['https://fresh.example/avatar/30.png']
+    api.errors[('user_detail', 30)] = err('Internal Server Error')
+    pro.download_missing_avatars()
+    failed = pro.job.snapshot()['detail']['failed']
+    assert pro.job.success == 2 and list(failed) == ['30']
+    assert failed['30']['name'] == 'Carol' and 'Internal Server Error' in failed['30']['note']
+    del api.errors[('user_detail', 30)]
+    pro.session.routes['https://fresh.example/avatar/30.png'] = BLOB
+    pro.download_missing_avatars()                                       # 再来一次：只补没成功的那一个
+    assert pro.job.total == 1 and pro.job.success == 1 and pro.avatar_ids() == {10, 20, 30}
+
+
+def test_force_redownloads_every_avatar(cfg, no_sleep):
+    pro, api, db = avatar_setup(cfg, with_file_for=(10, 20, 30))
+    pro.download_missing_avatars()
+    assert pro.job.total == 0                                            # 都有了：没有要补的
+    pro.download_missing_avatars(force=True)
+    assert pro.job.total == 3 and pro.job.success == 3
+    assert pro.session.requested.count('https://stored.example/avatar/10.png') == 1
+
+
+def test_sync_fetches_missing_and_changed_avatars(cfg, no_sleep):
+    import os
+    api = api_with({10: ('Alice', [105])})
+    real = api.user_following
+
+    def following(user_id, restrict='public', offset=None):
+        out = real(user_id, restrict=restrict, offset=offset)
+        for p in out['user_previews']:
+            p['user']['profile_image_urls'] = {'medium': api.avatar_url}
+        return out
+
+    api.user_following = following
+    api.avatar_url = 'https://a.example/v1.png'
+    pro, _ = make_processor(api, {'https://a.example/v1.png': BLOB, 'https://a.example/v2.png': BLOB + b'2'})
+    pro.sync()
+    path = os.path.join(cfg.AVATARS_PATH, '10.png')
+    assert os.path.getsize(path) == len(BLOB)
+    pro.sync()                                                           # 没变：不重下
+    assert pro.session.requested.count('https://a.example/v1.png') == 1
+    api.avatar_url = 'https://a.example/v2.png'                          # 画师换了头像
+    pro.sync()
+    assert os.path.getsize(path) == len(BLOB) + 1
+
+
+# ================================================================ 日志里那两个报错
+def test_restricted_access_message_is_treated_as_rate_limit():
+    from pixiv_dl.pixiv_client import RATE_LIMIT, classify_error
+    assert classify_error(err('Your access is currently restricted.')).kind == RATE_LIMIT
+
+
+def test_ugoira_recorded_as_image_is_downloaded_as_ugoira(cfg, no_sleep):
+    api = FakeAPI()
+    ill = make_illust(700, type='ugoira')
+    api.details[700] = ill
+    pro, _ = make_processor(api, {})
+    db = Database.local(cfg.DB_PATH)
+    db.upsert_artist(1, 'Alice')
+    db.save_illust({'task_key': '700_0', 'illust_id': 700, 'page_index': 0, 'author_id': 1, 'title': 't',
+                    'url': 'https://old.example/700_p0.jpg', 'media_type': 'image'})        # 旧数据把动图记成了图片
+    pro.download()
+    row = db.conn.execute("SELECT media_type, last_error FROM illusts WHERE task_key = '700_0'").fetchone()
+    assert row[0] == 'ugoira'                                            # 类型改过来了
+    assert 'No connection adapters' not in (row[1] or '') and 'ugoira://' not in (row[1] or '')
+    assert not any(u.startswith('ugoira://') for u in pro.session.requested)
+
+
+def test_pause_takes_effect_between_pages_of_one_work(cfg, no_sleep):
+    api = api_with({10: ('Alice', [])})
+    api.illusts[(10, 'illust')] = [make_illust(500, pages=4)]
+    pro, _ = make_processor(api, routes_for(api))
+    pro.sync()
+    real = pro._download_image_page
+    times = []
+
+    def page(db, key, iid, idx, url, folder, old_url):
+        times.append(time.time())
+        if len(times) == 2:
+            interrupt.pause()
+            threading.Timer(0.6, interrupt.resume).start()
+        return real(db, key, iid, idx, url, folder, old_url)
+
+    pro._download_image_page = page
+    pro.download()
+    assert len(times) == 4 and times[2] - times[1] >= 0.5                # 第 2 页之后停住了，继续后才下第 3 页
+    assert sum(1 for v in statuses(Database.local(cfg.DB_PATH)).values() if v == 1) == 4

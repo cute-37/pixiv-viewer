@@ -45,7 +45,8 @@ def classify_error(res):
     else:
         text = str(err if err is not None else "empty response")
     low = text.lower()
-    if "rate limit" in low:
+    # “Your access is currently restricted.” 也是访问太频繁被临时限制，和 Rate Limit 一样等一等就好
+    if "rate limit" in low or "access is currently restricted" in low or "too many requests" in low:
         return ApiError(RATE_LIMIT, text.strip())
     if any(h in low for h in _AUTH_HINTS) or _AUTH_RE.search(low):
         return ApiError(AUTH, text.strip())

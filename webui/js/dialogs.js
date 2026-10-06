@@ -1,6 +1,7 @@
 // 对话框：设置（所有外观参数都是可选项，改动立即生效）、批量添加标签
 import { $, $$, esc, icon, toast, fmtNum, fmtSize } from "./util.js";
 import { mountUpdate } from "./update.js";
+import { ACTIONS, FIXED, GROUPS, comboLabel, comboOf, mouseCombo } from "./keymap.js";
 import { FAMILIES, ACCENTS, FONTS, HEAD_FONTS, DEFAULTS, setDensity, markCustomDensity, palette } from "./settings.js";
 
 import { DL_SETTINGS_PAGES } from "./downloader.js";
@@ -12,21 +13,13 @@ const PAGES = [
   ["#", "其他"], ["keys", "快捷键", "cmd"], ["about", "关于", "info"],
 ];
 
-const KEYS = [
-  ["网格", [["移动选中", "← → ↑ ↓"], ["打开作品", "Enter / 双击"], ["快速预览", "Space"], ["多选", "Ctrl + 点击 / Shift + 点击"], ["全选", "Ctrl A"],
-    ["收藏", "F"], ["评分 / 清除评分", "1 – 5 / 0"], ["添加标签", "T"], ["复制路径", "Ctrl C"], ["缩略图大小", "Ctrl + 滚轮"], ["取消选择", "Esc"]]],
-  ["看图", [["上一个 / 下一个作品", "← / →"], ["上一页 / 下一页（多页作品）", "↑ ↓ / Space"], ["缩放", "滚轮 / + −"], ["适应窗口 / 100%", "Ctrl 0 / Ctrl 1 / 双击"],
-    ["旋转", "R"], ["信息栏", "I"], ["全部页（多页作品）", "G"], ["幻灯片", "F5"], ["沉浸模式", "F11"], ["返回网格", "Esc"]]],
-  ["全局", [["搜索", "Ctrl K"], ["收起 / 展开侧栏", "Ctrl B"], ["设置", "Ctrl ,"], ["快捷键一览", "?"]]],
-];
-
 export function initDialogs(ctx) {
   const scrim = $("#scrim");
   let page = "look";
   let mode = null; // "settings" | "tags"
 
   ctx.dialogOpen = () => !scrim.hidden;
-  ctx.closeDialog = () => { scrim.hidden = true; mode = null; };
+  ctx.closeDialog = () => { scrim.hidden = true; mode = null; stopCapture(); };
   scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) ctx.closeDialog(); });
 
   // ================= 设置 =================
@@ -155,9 +148,55 @@ export function initDialogs(ctx) {
       ]),
     ].join("");
   }
+  // ---------- 快捷键：可以改 ----------
+  let capture = null;      // 正在等新按键的那一格：{id, index}（index = -1 表示新加一个）
+  const stopCapture = () => { capture = null; ctx.capturingKey = false; };
   function keys() {
-    return KEYS.map(([g, list]) => `<div class="group"><div class="gh">${g}</div><div class="keys">${list.map(([a, k]) => `<div>${a}</div><div>${k.split(" / ").map((x) => `<span class="kbd">${esc(x)}</span>`).join(" ")}</div>`).join("")}</div></div>`).join("");
+    const km = ctx.keymap;
+    const chip = (id, combo, i) => (capture && capture.id === id && capture.index === i
+      ? `<span class="kbd key wait">按下新的按键…</span>`
+      : `<button class="kbd key" data-key="${id}" data-key-i="${i}" title="点一下，然后按新的按键；按 Delete 去掉这个按键">${esc(comboLabel(combo))}</button>`);
+    const any = ACTIONS.some((a) => !km.isDefault(a[1]));
+    return `<div class="group"><div class="set"><div class="t">快捷键可以改<small>点某个按键，再按下想用的新按键（鼠标侧键也可以）。按 Esc 取消，按 Delete 去掉这个按键。</small></div>
+        <div class="ctl"><button class="btn" data-act="keys-reset" ${any ? "" : "disabled"}>全部恢复默认</button></div></div></div>`
+      + GROUPS.map((g) => `<div class="group"><div class="gh">${g}</div><div class="keys edit">${ACTIONS.filter((a) => a[0] === g).map(([, id, label]) => {
+        const list = km.bindings(id);
+        return `<div>${label}</div><div class="kb">${list.map((c, i) => chip(id, c, i)).join("")}${capture && capture.id === id && capture.index === -1 ? chip(id, "", -1) : `<button class="kbd key add" data-key="${id}" data-key-i="-1" title="再加一个按键">+</button>`}
+          ${km.isDefault(id) ? "" : `<button class="linkbtn" data-key-reset="${id}">恢复默认</button>`}</div>`;
+      }).join("")}${FIXED.filter((f) => f[0] === g).map(([, label, how]) => `<div>${label}</div><div class="kb"><span class="kbd">${esc(how)}</span><small>不能改</small></div>`).join("")}</div></div>`).join("");
   }
+  function setBinding(id, list) {
+    const all = { ...(S().keys || {}) };
+    if (list) all[id] = list; else delete all[id];
+    ctx.setSetting({ keys: all });
+    ctx.syncKeyHints && ctx.syncKeyHints();
+  }
+  function onCaptured(combo) {
+    const { id, index } = capture, km = ctx.keymap, list = [...km.bindings(id)];
+    if (combo === "Escape") { stopCapture(); return renderPage(true); }
+    if (combo === "Delete" || combo === "Backspace") {
+      if (index >= 0) { list.splice(index, 1); setBinding(id, list); }
+      stopCapture(); return renderPage(true);
+    }
+    const used = km.conflict(id, combo);
+    if (used) { toast(`${comboLabel(combo)} 已经用于“${used}”，先把那边改掉`); return; }
+    if (list.includes(combo)) { stopCapture(); return renderPage(true); }
+    if (index >= 0) list[index] = combo; else list.push(combo);
+    setBinding(id, list);
+    stopCapture(); renderPage(true);
+  }
+  document.addEventListener("keydown", (e) => {
+    if (!capture) return;
+    const combo = comboOf(e); if (!combo) return;
+    e.preventDefault(); e.stopPropagation();
+    onCaptured(combo);
+  }, true);
+  document.addEventListener("mouseup", (e) => {
+    if (!capture) return;
+    const combo = mouseCombo(e); if (!combo) return;
+    e.preventDefault(); e.stopPropagation();
+    onCaptured(combo);
+  }, true);
   function about() {
     return group("", [
       row("Pixiv Viewer", "为 Pixiv 下载目录设计的本地图片浏览器", ctx.lib.version ? `<span class="ver">版本 ${esc(ctx.lib.version)}</span>` : ""),
@@ -206,6 +245,11 @@ export function initDialogs(ctx) {
       toast(`已清空缩略图缓存，释放 ${fmtSize((r && r.freed) || 0)}`);
       return renderPage(true);
     }
+    const keyChip = e.target.closest("[data-key]");
+    if (keyChip) { capture = { id: keyChip.dataset.key, index: +keyChip.dataset.keyI }; ctx.capturingKey = true; return renderPage(true); }
+    const keyReset = e.target.closest("[data-key-reset]");
+    if (keyReset) { stopCapture(); setBinding(keyReset.dataset.keyReset, null); return renderPage(true); }
+    if (act?.dataset.act === "keys-reset") { stopCapture(); ctx.setSetting({ keys: {} }); ctx.syncKeyHints && ctx.syncKeyHints(); return renderPage(true); }
     if (act?.dataset.act === "reset-look") {
       const keep = { lastScope: ctx.S.lastScope, sort: ctx.S.sort, rating: ctx.S.rating };
       Object.assign(ctx.S, DEFAULTS, keep);

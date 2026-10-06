@@ -241,7 +241,7 @@ class JobRunner:
             'sync_download_artists': lambda: pro.sync_and_download_artists(ids()),
             'verify': lambda: pro.verify_storage(apply=bool(p.get('apply'))),
             'refresh_profiles': lambda: pro.refresh_all_artist_profiles(only_missing=not p.get('all'), limit=limit()),
-            'download_avatars': lambda: pro.download_missing_avatars(limit=limit()),
+            'download_avatars': lambda: pro.download_missing_avatars(limit=limit(), force=bool(p.get('all'))),
             'db_vacuum': lambda: pro.db_vacuum(),
         }
         if kind not in table:

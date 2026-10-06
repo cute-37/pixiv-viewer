@@ -305,6 +305,12 @@ class DownloadMixin:
         if not is_visible(ill):
             # API 给的是“无权查看”的占位项：作品还在，只是这个账号看不了（例如没开 R-18 显示、作者限制了范围）
             raise _NotVisible("这个账号无权查看", restricted=True)
+        if _g(ill, 'type') == 'ugoira':
+            # 库里把它记成了普通图片（旧数据），实际是动图：改过来，按动图下载。
+            # 以前会拿 ugoira:// 这个占位地址去当图片下，报 “No connection adapters were found”。
+            with db.tx() as c:
+                c.execute("UPDATE illusts SET media_type = 'ugoira' WHERE illust_id = ?", (iid,))
+            return self._group_ugoira(client, db, iid, tasks[:1], folder)
         fresh = {idx: url for idx, url, _ in extract_pages(ill)}
         results = dict(pre)
         for task in tasks:
@@ -315,7 +321,7 @@ class DownloadMixin:
             if not url:
                 results[key] = ('fail', f"作品当前不存在第 {idx} 页", True, 'deleted')
                 continue
-            if interrupt.is_set():
+            if interrupt.wait_if_paused() or interrupt.is_set():       # 暂停在页与页之间就生效，不用等整个作品下完
                 raise InterruptedError()
             results[key] = self._download_image_page(db, key, iid, idx, url, folder, task[5])
         return results, True

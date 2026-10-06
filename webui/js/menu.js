@@ -71,7 +71,7 @@ $("#btn-more").addEventListener("click", (e) => {
     ["显示底部状态条", () => ctx.setSetting({ status: S.status === "on" ? "off" : "on" }), S.status === "on" ? "check" : ""],
     "-",
     ["添加文件夹…", addFolder, "plus"],
-    ["设置", () => ctx.openSettings(), "gear", "Ctrl ,"],
+    ["设置", () => ctx.openSettings(), "gear", ctx.keymap ? ctx.keymap.label("settings") : ""],
     ["快捷键", () => ctx.openSettings("keys"), "cmd", "?"],
   ], r.right - 200, r.bottom + 4);
 });

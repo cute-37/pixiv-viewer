@@ -3,6 +3,7 @@ import { $, debounce, clamp, toast, initToast } from "./util.js";
 import { normalize, applySettings, loadPreviewFonts } from "./settings.js";
 import { connect } from "./api.js";
 import { announceUpdate } from "./update.js";
+import { createKeymap, comboOf, mouseCombo } from "./keymap.js";
 import { initViewer } from "./viewer.js";
 import { initDialogs } from "./dialogs.js";
 import { initHover } from "./hover.js";
@@ -11,7 +12,7 @@ import { initWindowControls } from "./winctl.js";
 import { ctx, view } from "./state.js";
 import { ensureTile, loadWorks, refreshSelection, runAction, selectedKeys, setStars, tileEls } from "./grid.js";
 import { persist, syncChrome } from "./prefs.js";
-import { folderById, reloadLibrary, renderSide } from "./sidebar.js";
+import { folderById, navGo, navRecord, reloadLibrary, renderSide } from "./sidebar.js";
 import { closePops, renderTagRow } from "./toolbar.js";
 
 // ================= 拖动调整宽度 =================
@@ -72,38 +73,61 @@ function gridMove(dir) {
   tiles[i].scrollIntoView({ block: "nearest" });
   if (ctx.quicklookOpen()) ctx.openQuicklook(k);
 }
-document.addEventListener("keydown", (e) => {
+// 按键和鼠标侧键都先认成“动作”（见 keymap.js，可以在设置里改），再按当前在哪个界面去执行
+const keymap = createKeymap(() => ctx.S.keys);
+ctx.keymap = keymap;
+ctx.syncKeyHints = () => { const k = $("#search .kbd"); if (k) k.textContent = keymap.label("search"); };
+function goBack() {
+  if (ctx.dialogOpen && ctx.dialogOpen()) return ctx.closeDialog();
+  if (!$("#menu").hidden) { $("#menu").hidden = true; return; }
+  if (!$("#tagpop").hidden || !$("#filterpop").hidden) return closePops();
+  if (ctx.quicklookOpen && ctx.quicklookOpen()) { $("#quicklook").hidden = true; return; }
+  if (ctx.viewerOpen && ctx.viewerOpen()) return ctx.closeViewer();
+  navGo(-1);
+}
+function runGlobal(id) {
+  if (id === "search") { ctx.closeViewer && ctx.closeViewer(); if (ctx.dialogOpen && ctx.dialogOpen()) ctx.closeDialog(); $("#q").focus(); $("#q").select(); }
+  else if (id === "settings") ctx.openSettings();
+  else if (id === "sidebar") ctx.setSetting({ sidebarCollapsed: !ctx.S.sidebarCollapsed });
+  else if (id === "keys") ctx.openSettings("keys");
+  else if (id === "back") goBack();
+  else if (id === "forward") { if (!(ctx.dialogOpen && ctx.dialogOpen()) && !(ctx.viewerOpen && ctx.viewerOpen())) navGo(1); }
+}
+function handleCombo(combo, e, mouse = false) {
+  if (!combo || ctx.capturingKey || document.querySelector(".closeask")) return;
   const tag = (e.target.tagName || "").toLowerCase();
-  const typing = tag === "input" || tag === "textarea" || tag === "select";
-  const ctrl = e.ctrlKey || e.metaKey;
-  if (ctrl && e.key.toLowerCase() === "k") { e.preventDefault(); ctx.closeViewer && ctx.closeViewer(); $("#q").focus(); $("#q").select(); return; }
-  if (ctrl && e.key === ",") { e.preventDefault(); ctx.openSettings(); return; }
-  if (ctrl && e.key.toLowerCase() === "b") { e.preventDefault(); ctx.setSetting({ sidebarCollapsed: !ctx.S.sidebarCollapsed }); return; }
+  const typing = !mouse && (tag === "input" || tag === "textarea" || tag === "select");
+  const global = keymap.find(combo, ["全局"]);
+  // 鼠标侧键，以及带 Ctrl / Alt 的全局动作，在哪里都生效（正在打字、开着对话框也行）
+  if (global && (mouse || /^(Ctrl|Alt)\+/.test(combo) || /^F\d+$/.test(combo))) { e.preventDefault(); runGlobal(global); return; }
   if (typing) return;
-  if (ctx.dialogOpen && ctx.dialogOpen()) { if (e.key === "Escape") ctx.closeDialog(); return; }
+  if (ctx.dialogOpen && ctx.dialogOpen()) { if (combo === "Escape") ctx.closeDialog(); return; }
   if (!$("#menu").hidden) return;
-  if (e.key === "Escape" && (!$("#tagpop").hidden || !$("#filterpop").hidden)) { closePops(); return; }
-  if (ctx.handleViewerKey && ctx.handleViewerKey(e)) return;
-  if (ctx.handleQuicklookKey && ctx.handleQuicklookKey(e)) return;
-  // 网格
-  const keys = selectedKeys();
-  switch (true) {
-    case e.key === "ArrowLeft": e.preventDefault(); gridMove("left"); break;
-    case e.key === "ArrowRight": e.preventDefault(); gridMove("right"); break;
-    case e.key === "ArrowUp": e.preventDefault(); gridMove("up"); break;
-    case e.key === "ArrowDown": e.preventDefault(); gridMove("down"); break;
-    case e.key === "Enter" && !!view.cur: ctx.openViewer(view.flat.indexOf(view.cur)); break;
-    case e.key === " " && !!view.cur: e.preventDefault(); ctx.openQuicklook(view.cur); break;
-    case ctrl && e.key.toLowerCase() === "a": e.preventDefault(); view.sel = new Set(view.flat); refreshSelection(); break;
-    case ctrl && e.key.toLowerCase() === "c" && keys.length > 0: e.preventDefault(); runAction("copy", keys); break;
-    case e.key === "Escape" && view.sel.size > 0: view.sel.clear(); refreshSelection(); break;
-    case /^[0-5]$/.test(e.key) && !ctrl && keys.length > 0: setStars(keys, +e.key); break;
-    case e.key.toLowerCase() === "f" && !ctrl && keys.length > 0: runAction("fav", keys); break;
-    case e.key.toLowerCase() === "t" && !ctrl && keys.length > 0: e.preventDefault(); runAction("tag", keys); break;
-    case e.key === "?": ctx.openSettings("keys"); break;
-    default: return;
+  if (combo === "Escape" && (!$("#tagpop").hidden || !$("#filterpop").hidden)) { closePops(); return; }
+  if (ctx.viewerOpen && ctx.viewerOpen()) {
+    const id = keymap.find(combo, ["看图"]);
+    if (id) { e.preventDefault(); ctx.handleViewerAction(id, combo); }
+    else if (/^[0-5]$/.test(combo)) ctx.handleViewerStar(+combo);
+    else if (global) { e.preventDefault(); runGlobal(global); }
+    return;
   }
-});
+  if (ctx.handleQuicklookKey && ctx.handleQuicklookKey(e)) return;
+  const id = keymap.find(combo, ["网格"]), keys = selectedKeys();
+  if (id && id.startsWith("grid.") && ["left", "right", "up", "down"].includes(id.slice(5))) { e.preventDefault(); gridMove(id.slice(5)); }
+  else if (id === "grid.open") { if (view.cur) ctx.openViewer(view.flat.indexOf(view.cur)); }
+  else if (id === "grid.quicklook") { if (view.cur) { e.preventDefault(); ctx.openQuicklook(view.cur); } }
+  else if (id === "grid.selectAll") { e.preventDefault(); view.sel = new Set(view.flat); refreshSelection(); }
+  else if (id === "grid.copy") { if (keys.length) { e.preventDefault(); runAction("copy", keys); } }
+  else if (id === "grid.clear") { if (view.sel.size) { view.sel.clear(); refreshSelection(); } }
+  else if (id === "grid.fav") { if (keys.length) runAction("fav", keys); }
+  else if (id === "grid.tag") { if (keys.length) { e.preventDefault(); runAction("tag", keys); } }
+  else if (/^[0-5]$/.test(combo)) { if (keys.length) setStars(keys, +combo); }
+  else if (global) { e.preventDefault(); runGlobal(global); }
+}
+document.addEventListener("keydown", (e) => handleCombo(comboOf(e), e));
+// 鼠标侧键：按下时先拦住浏览器自己的“后退 / 前进”，松开时当作一次按键
+document.addEventListener("mousedown", (e) => { if (e.button === 3 || e.button === 4) e.preventDefault(); });
+document.addEventListener("mouseup", (e) => { const combo = mouseCombo(e); if (combo && (e.button !== 1 || keymap.find(combo, ["全局", "网格", "看图"]))) { if (e.button !== 1) e.preventDefault(); handleCombo(combo, e, true); } });
 window.addEventListener("resize", debounce(renderTagRow, 100));
 if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (ctx.S.mode === "system") { applySettings(ctx.S); syncChrome(); } });
 
@@ -127,8 +151,10 @@ async function boot() {
   if (last && (last.scope !== "artist" || ctx.artistByKey(last.artist)) && (last.scope !== "folder" || folderById(last.folder))) {
     view.scope = last.scope; view.artist = last.artist || null; view.folder = last.folder || null;
   }
+  ctx.syncKeyHints();
   renderSide();
   await loadWorks(true);
+  navRecord();
   // 桌面版后台索引完成后刷新计数与列表
   window.__pvLibraryUpdated = async (done) => {
     await reloadLibrary();

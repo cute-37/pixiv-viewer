@@ -533,3 +533,95 @@ def test_close_request_from_system_goes_through_the_same_prompt(desktop_page):
     pg.wait_for_selector(".closeask")
     pg.evaluate("void window.__pvRequestClose()")                    # 连着触发两次也只有一个询问框
     assert pg.locator(".closeask").count() == 1
+
+
+# ---------------- 快捷键：默认值、修改、鼠标侧键 ----------------
+def focused_id(page):
+    return page.evaluate("document.activeElement && document.activeElement.id")
+
+
+def side_button(page, button):
+    """按一下鼠标侧键（3 = 后退，4 = 前进）"""
+    page.evaluate("""(b) => { for (const t of ['mousedown', 'mouseup']) document.body.dispatchEvent(new MouseEvent(t, { button: b, bubbles: true, cancelable: true })); }""", button)
+
+
+def test_search_shortcut_is_ctrl_f_and_ctrl_k_still_works(page):
+    assert page.locator("#search .kbd").inner_text() == "Ctrl F"
+    page.keyboard.press("Control+f")
+    assert focused_id(page) == "q"
+    page.locator("#grid-root .tile").first.click()
+    page.keyboard.press("Control+k")
+    assert focused_id(page) == "q"
+
+
+def test_shortcuts_can_be_changed_and_reset(page):
+    page.click("#btn-settings")
+    page.click(".dnav [data-page=keys]")
+    chip = page.locator("[data-key='v.rotate'][data-key-i='0']")
+    assert chip.inner_text() == "R"
+    chip.click()
+    page.wait_for_selector(".kbd.key.wait")
+    page.keyboard.press("f")                                          # 看图里 F 已经是“收藏”：不让重复
+    assert "已经用于" in page.locator("#toast-t").inner_text()
+    page.keyboard.press("x")
+    page.wait_for_selector("[data-key='v.rotate'][data-key-i='0']")
+    assert page.locator("[data-key='v.rotate'][data-key-i='0']").inner_text() == "X"
+    page.locator("[data-key='search'][data-key-i='-1']").click()      # 给“搜索”再加一个按键
+    page.keyboard.press("Control+Shift+p")
+    assert "Ctrl Shift P" in page.locator(".keys.edit").first.inner_text()
+    page.keyboard.press("Escape")
+    page.locator("#grid-root .tile").first.dblclick()                 # 进看图页试新按键
+    page.wait_for_selector("#viewer:not([hidden])")
+    before = page.evaluate("document.querySelector('#v-img').style.transform")
+    page.keyboard.press("r")                                          # 旧按键不再起作用
+    assert page.evaluate("document.querySelector('#v-img').style.transform") == before
+    page.keyboard.press("x")
+    page.wait_for_function("t => document.querySelector('#v-img').style.transform !== t", arg=before)
+    page.keyboard.press("Control+Shift+p")                            # 新加的搜索键：回到网格并聚焦搜索框
+    assert focused_id(page) == "q" and page.locator("#viewer").is_hidden()
+    page.click("#btn-settings")
+    page.click(".dnav [data-page=keys]")
+    page.click("[data-key-reset='v.rotate']")
+    assert page.locator("[data-key='v.rotate'][data-key-i='0']").inner_text() == "R"
+    page.click("[data-act=keys-reset]")
+    assert page.locator("[data-key-reset]").count() == 0
+
+
+def test_mouse_side_buttons_go_back_and_forward(page):
+    first = page.title()
+    top_level_artist(page).click()
+    page.wait_for_function("t => document.title !== t", arg=first)
+    artist_title = page.title()
+    page.locator("#grid-root .tile").first.dblclick()
+    page.wait_for_selector("#viewer:not([hidden])")
+    side_button(page, 3)                                              # 看图页里：后退 = 回到网格
+    page.wait_for_selector("#viewer", state="hidden")
+    assert page.title() == artist_title
+    side_button(page, 3)                                              # 再后退：回到之前浏览的位置
+    page.wait_for_function("t => document.title === t", arg=first)
+    side_button(page, 4)                                              # 前进：又回到那位画师
+    page.wait_for_function("t => document.title === t", arg=artist_title)
+    page.click("#btn-settings")
+    side_button(page, 3)                                              # 开着设置时：后退 = 关掉设置
+    page.wait_for_function("document.querySelector('#scrim').hidden")
+    assert page.title() == artist_title
+
+
+def test_side_button_can_be_rebound(page):
+    page.click("#btn-settings")
+    page.click(".dnav [data-page=keys]")
+    page.locator("[data-key='v.next'][data-key-i='-1']").click()      # 把“下一个作品”也绑到前进侧键
+    side_button(page, 4)
+    assert "已经用于" in page.locator("#toast-t").inner_text()        # 它现在是全局的“前进”：要先改掉那边
+    page.keyboard.press("Escape")
+    page.locator("[data-key='forward'][data-key-i='0']").click()
+    page.keyboard.press("Delete")
+    page.locator("[data-key='v.next'][data-key-i='-1']").click()
+    side_button(page, 4)
+    assert "鼠标侧键（前进）" in page.locator(".keys.edit").nth(2).inner_text()
+    page.keyboard.press("Escape")
+    page.locator("#grid-root .tile").first.dblclick()
+    page.wait_for_selector("#viewer:not([hidden])")
+    idx = page.locator("#v-idx").inner_text()
+    side_button(page, 4)
+    page.wait_for_function("t => document.querySelector('#v-idx').innerText !== t", arg=idx)

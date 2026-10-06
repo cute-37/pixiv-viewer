@@ -549,33 +549,35 @@ export function initViewer(ctx) {
   });
 
   // ---------- 键盘 ----------
-  ctx.handleViewerKey = (e) => {
+  ctx.viewerOpen = () => V.open;
+  ctx.handleViewerStar = (n) => { if (V.open) ctx.setStars([work().key], n); };
+  // 看图页里的快捷键动作（按什么键由 keymap.js 和设置决定）
+  ctx.handleViewerAction = (id, combo) => {
     if (!V.open) return false;
-    const ctrl = e.ctrlKey || e.metaKey;
-    const k = e.key;
-    if (k === "Escape" && !pagesOv.hidden) pagesOv.hidden = true;
-    else if (k.toLowerCase() === "g" && !ctrl) togglePages();
-    else if (k === "Escape") { if (viewerEl.classList.contains("zen")) toggleZen(); else if (V.playing) stopSlideshow(); else ctx.closeViewer(); }
-    else if (k === "ArrowLeft") goWork(-1);
-    else if (k === "ArrowRight") goWork(1);
-    else if (k === "ArrowUp" || k === "PageUp") goPage(-1);
-    else if (k === "ArrowDown" || k === "PageDown") goPage(1);
-    else if (k === " ") { if (V.playing) stopSlideshow(); else goPage(1); }
-    else if (k === "Home") show(0);
-    else if (k === "End") show(view.works.length - 1);
-    else if (k === "+" || k === "=") zoomBy(1.25);
-    else if (k === "-") zoomBy(0.8);
-    else if (ctrl && k === "0") fitNow();
-    else if (ctrl && k === "1") actual();
-    else if (k.toLowerCase() === "r" && !ctrl) { V.rot = (V.rot + 90) % 360; V.fit ? fitNow() : apply(); }
-    else if (k.toLowerCase() === "f" && !ctrl) ctx.setFav([work().key], !work().fav);
-    else if (k.toLowerCase() === "i" && !ctrl) toggleInfo();
-    else if (k === "F5") V.playing ? stopSlideshow() : startSlideshow();
-    else if (k === "F11" || (k === "Enter" && e.altKey)) toggleZen();
-    else if (/^[0-5]$/.test(k) && !ctrl) ctx.setStars([work().key], +k);
-    else if (ctrl && k.toLowerCase() === "c") copyText(page().path, ctx.api).then((ok) => toast(ok ? "已复制路径" : "复制失败"));
+    if (id === "v.close") {
+      if (!pagesOv.hidden) pagesOv.hidden = true;
+      else if (viewerEl.classList.contains("zen")) toggleZen();
+      else if (V.playing) stopSlideshow();
+      else ctx.closeViewer();
+    }
+    else if (id === "v.pages") togglePages();
+    else if (id === "v.prev") goWork(-1);
+    else if (id === "v.next") goWork(1);
+    else if (id === "v.pageUp") goPage(-1);
+    else if (id === "v.pageDown") { if (V.playing && combo === "Space") stopSlideshow(); else goPage(1); }
+    else if (id === "v.first") show(0);
+    else if (id === "v.last") show(view.works.length - 1);
+    else if (id === "v.zoomIn") zoomBy(1.25);
+    else if (id === "v.zoomOut") zoomBy(0.8);
+    else if (id === "v.fit") fitNow();
+    else if (id === "v.actual") actual();
+    else if (id === "v.rotate") { V.rot = (V.rot + 90) % 360; V.fit ? fitNow() : apply(); }
+    else if (id === "v.fav") ctx.setFav([work().key], !work().fav);
+    else if (id === "v.info") toggleInfo();
+    else if (id === "v.slide") V.playing ? stopSlideshow() : startSlideshow();
+    else if (id === "v.zen") toggleZen();
+    else if (id === "v.copy") copyText(page().path, ctx.api).then((ok) => toast(ok ? "已复制路径" : "复制失败"));
     else return false;
-    e.preventDefault();
     return true;
   };
 

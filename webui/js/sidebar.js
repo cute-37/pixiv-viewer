@@ -64,8 +64,28 @@ export function openScope(scope, artist = null) {
   loadWorks(true);
   ctx.S.lastScope = { scope, artist: view.artist, folder: view.folder };
   persist();
+  navRecord();
 }
 ctx.openScope = openScope;
+
+// 浏览过的位置（全部、某位画师、某个文件夹……），给“后退 / 前进”用，就像浏览器那样
+const nav = { list: [], at: -1, moving: false };
+export function navRecord() {
+  if (nav.moving) return;
+  const here = { scope: view.scope, artist: view.artist, folder: view.folder }, last = nav.list[nav.at];
+  if (last && last.scope === here.scope && last.artist === here.artist && last.folder === here.folder) return;
+  nav.list = nav.list.slice(0, nav.at + 1).concat(here).slice(-100);
+  nav.at = nav.list.length - 1;
+}
+/** 后退（-1）或前进（1）一步。没有可去的地方时返回 false。 */
+export function navGo(step) {
+  const to = nav.list[nav.at + step];
+  if (!to) return false;
+  nav.at += step;
+  nav.moving = true;
+  try { openScope(to.scope, to.scope === "folder" ? to.folder : to.artist); } finally { nav.moving = false; }
+  return true;
+}
 
 $("#nav").addEventListener("click", (e) => { const b = e.target.closest("[data-nav]"); if (b) openScope(b.dataset.nav); });
 $(".side-rail").addEventListener("click", (e) => {

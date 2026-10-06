@@ -162,7 +162,7 @@ class Database(QueryMixin):
                 return None
             from pixiv_dl import dbtools
             dest = dbtools.create_backup(self.db_path, 'pre_v2', conn=self.conn)   # 原子写入，中断不会留下残缺文件
-            logger.info(f"数据库结构需要升级（{reason}），已备份到 {dest}")
+            logger.info(f"数据库结构已自动升级到新版本的格式，不需要任何操作。升级前的备份在 {dest}（补上的内容：{reason}）")
             return dest
         except Exception as e:
             logger.warning(f"迁移前备份失败: {e}")

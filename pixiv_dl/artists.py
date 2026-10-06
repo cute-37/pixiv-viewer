@@ -16,7 +16,8 @@ _AVATAR_EXTS = ('jpg', 'jpeg', 'png', 'gif', 'webp')
 
 
 class ArtistMixin:
-    """画师资料 / 头像。头像地址一律用 user_detail 现取，不使用库里保存的旧地址。"""
+    """画师资料 / 头像。"""
+    _last_detail_error = ''
 
     def fetch_artist_detail(self, aid):
         """调用 user_detail，返回规整后的 dict；失败返回 None。画师不存在时返回 {'_gone': True}。"""
@@ -31,6 +32,7 @@ class ArtistMixin:
             if err.kind == INTERRUPTED:
                 raise InterruptedError()
             logger.warning(f"获取画师 {aid} 详情失败: {err.message}")
+            self._last_detail_error = err.message
             return None
         user, profile = _g(res, 'user'), _g(res, 'profile')
         if not user:
@@ -126,42 +128,81 @@ class ArtistMixin:
         job.set_current("profile", None)
         return job.success, job.failed
 
+    def avatar_ids(self):
+        """头像文件夹里已经有头像的画师编号（看的是实际的文件，不是数据库里的记录）"""
+        have = set()
+        try:
+            for entry in os.scandir(Config.AVATARS_PATH):
+                stem, _, ext = entry.name.rpartition('.')
+                if stem.isdigit() and ext.lower() in _AVATAR_EXTS and entry.is_file() and entry.stat().st_size > 100:
+                    have.add(int(stem))
+        except OSError:
+            pass
+        return have
+
     @job_op('download_avatars')
-    def download_missing_avatars(self, limit=None):
-        """补全缺失的本地头像（会向 API 现取最新头像地址）。"""
+    def download_missing_avatars(self, limit=None, force=False):
+        """补全头像。缺不缺看头像文件夹里实际有没有文件——数据库是从别处导入的话，记录里写着“有”，文件却不在这里。
+
+        先用数据库里记着的头像地址直接下载（不占接口请求）；地址没有或已经失效，才向 Pixiv 要一次最新的资料。
+        force=True：不管有没有，全部重新下载一遍（画师换了头像时用）。
+        """
+        from pixiv_dl import ratelimit
         db = Database.local(Config.DB_PATH)
         job = self.job
-        artists = db.get_artists_without_avatar(limit=limit)
-        # 库里没有头像地址的画师也需要补
-        have = {a[0] for a in artists}
-        for row in db.conn.execute(
-                "SELECT author_id, author_name, profile_image_url FROM artists WHERE "
-                "COALESCE(is_deleted,0)=0 AND (profile_image_local IS NULL OR profile_image_local='')"):
-            if row[0] not in have:
-                artists.append(row)
+        have = set() if force else self.avatar_ids()
+        artists = [r for r in db.conn.execute(
+            "SELECT author_id, author_name, profile_image_url FROM artists WHERE COALESCE(is_deleted,0) = 0 "
+            "ORDER BY author_id") if r[0] not in have]
         if limit:
             artists = artists[:int(limit)]
         if not artists:
             job.log("所有画师都已有头像")
+            job.set(result={'avatars': 0, 'missing_before': 0})
             return 0, 0
         self.ensure_clients()
+        client = self.get_main_client() or self.get_any_client()
         job.set(total=len(artists), phase="下载头像")
-        for aid, name, _old_url in artists:
-            if interrupt.is_set():
+        job.log(f"{'重新下载' if force else '缺少'} {len(artists)} 位画师的头像")
+        for aid, name, url in artists:
+            if interrupt.wait_if_paused() or interrupt.is_set():
+                break
+            if client is not None and ratelimit.gate.exhausted(client.name):
+                job.log("账号被限速太久，剩下的头像留到下次再补")
                 break
             job.set_current("avatar", f"[{aid}] {name}")
+            used_api, reason = False, ''
             try:
-                ok = self.refresh_artist_profile(aid)
+                path = self.download_artist_avatar(aid, url, force=force) if url else None
+                if not path:
+                    used_api = True
+                    self._last_detail_error = ''
+                    if self.refresh_artist_profile(aid):
+                        path = f"avatars/{aid}" if aid in self.avatar_ids_of([aid]) else None
+                        reason = '' if path else '头像文件没有下载下来'
+                    else:
+                        reason = self._last_detail_error or '读不到这位画师的资料'
+                elif not force or path:
+                    db.upsert_artist(aid, None, profile_image_local=path)
             except InterruptedError:
                 break
             except Exception as e:
                 logger.warning(f"下载画师 {aid} 头像失败: {e}")
-                ok = False
-            job.add(done=1, **({'success': 1} if ok else {'failed': 1}))
-            if self._sleep(random.uniform(0.3, 0.8)):
+                path, reason = None, f"{type(e).__name__}: {e}"
+            if path:
+                job.add(done=1, success=1)
+            else:
+                job.add(done=1, failed=1)
+                job.tally('failed', aid, name=name or f"画师 {aid}", note=reason[:160], kind='avatar')
+            if self._sleep(random.uniform(0.5, 1.2) if used_api else random.uniform(0.05, 0.2)):
                 break
         job.set_current("avatar", None)
+        job.set(result={'avatars': job.success, 'avatars_failed': job.failed, 'not_done': max(0, len(artists) - job.done)})
         return job.success, job.failed
+
+    def avatar_ids_of(self, ids):
+        have = self.avatar_ids()
+        return {a for a in ids if a in have}
 
     def view_artist_profile(self, aid):
         """CLI：打印画师资料。"""
