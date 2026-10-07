@@ -852,3 +852,17 @@ def test_settings_are_grouped_by_what_they_are_about(page):
     assert set(page.locator("[data-dl=save]").get_attribute("data-keys").split(",")) >= {"SYNC_TYPES", "REVIEW_THRESHOLD"}
     assert "PROXY_MODE" not in page.locator("[data-dl=save]").get_attribute("data-keys")
     assert page.locator("[data-dl=save]").is_enabled()
+
+
+def test_one_click_on_artist_name_opens_pixiv_in_the_desktop_window(desktop_page):
+    """桌面窗口里标题栏是拖动窗口的把手：画师的名字和头像不算在内，单击一次就打开主页"""
+    pg = desktop_page
+    pg.locator('#artists .row-btn[data-artist]').nth(2).click()
+    pg.locator('#title-area h1[role=link]').wait_for()
+    pg.evaluate("""async () => { const api = (await import('./js/state.js')).ctx.api; window.__urls = []; window.__pvWindowActions = [];
+        api.openUrl = (u) => { window.__urls.push(u); }; }""")
+    pg.locator('#title-area h1[role=link]').click()
+    pg.locator('#title-area .big-avatar').click()
+    assert len(pg.evaluate("window.__urls")) == 2 and pg.evaluate("window.__pvWindowActions") == []
+    pg.locator('#title-area .meta').click()                              # 旁边的空白处仍然可以拖动窗口
+    assert "drag" in pg.evaluate("window.__pvWindowActions")

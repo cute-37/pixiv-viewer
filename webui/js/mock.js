@@ -226,7 +226,7 @@ export const mock = {
   async reveal() { return "preview"; },
   async openExternal() { return "preview"; },
   // 预览版里没有真的窗口。地址里带 ?desktop 时装作有（显示窗口按钮），用来演示和测试“关闭时询问”
-  ...(new URLSearchParams(location.search).has("desktop") ? { async windowAction(action) { if (action === "tray" || action === "close") window.__pvLastWindowAction = action; return false; } } : {}),
+  ...(new URLSearchParams(location.search).has("desktop") ? { async windowAction(action) { (window.__pvWindowActions = window.__pvWindowActions || []).push(action); if (action === "tray" || action === "close") window.__pvLastWindowAction = action; return false; } } : {}),
   async saveText(name) { return "D:\\导出\\" + name; },
   async clearCache() { const freed = mockCacheSize; mockCacheSize = 0; return { removed: 4321, freed }; },
   // 任务结束后的动作：预览版里只演示倒计时，不会真的关机

@@ -60,7 +60,7 @@ export function initWindowControls(api, dragSelector, prefs) {
     const edge = e.target.closest("[data-edge]");
     if (edge) { e.preventDefault(); act("resize:" + edge.dataset.edge); return; }
     if (!e.target.closest(dragSelector)) return;
-    if (e.target.closest("button, input, select, textarea, a, .search, .seg, .suggest")) return;
+    if (e.target.closest("button, input, select, textarea, a, [role=link], .search, .seg, .suggest")) return;   // 能点的东西不当作拖动窗口的把手
     e.preventDefault();
     if (e.detail === 2) return void act("toggle").then(setMax);
     if (e.detail !== 1) return;
