@@ -726,3 +726,94 @@ def test_bytes_are_counted_while_a_file_is_still_downloading(cfg, no_sleep):
     data = pro._http_get('https://img.example/big.zip')
     assert pro.job.snapshot()['transferred'] == len(data) == len(BLOB) * 50
     assert pro.job.bytes == 0                                # 这个数要等文件处理完才加
+
+
+def test_stall_watch_logs_when_nothing_moves_and_when_it_recovers(caplog):
+    """任务很久没有任何进展：记一条日志（停了多久、每个账号在干什么），之后隔一阵再记；恢复时也记一条"""
+    import logging
+    import time
+    from pixiv_dl import interrupt, stallwatch
+    from pixiv_dl.progress import JobState
+    interrupt.clear()
+    job = JobState('download')
+    job.set(phase='下载')
+    job.worker_register('main', 2)
+    job.worker_begin('main', '[1] Alice · 105')
+    watch = stallwatch.StallWatch(lambda: job)
+    t0 = time.time()
+    with caplog.at_level(logging.INFO, logger="PixivDownloader"):
+        assert watch.check(t0 + 60) is None                              # 一分钟：还不算
+        assert job.snapshot()['idle'] < 5
+        msg = watch.check(t0 + 150)
+        assert msg and '2 分 30 秒' in msg and 'main: [1] Alice · 105' in msg and '下载' in msg
+        assert watch.check(t0 + 200) is None                             # 不会每次都刷一条
+        assert '7 分' in watch.check(t0 + 150 + stallwatch.REPEAT_EVERY + 1)
+        job.add_transfer(1000)                                           # 又收到数据了
+        assert watch.check() == "恢复了：又有进展了"
+        assert watch.check() is None
+    assert any('没有任何进展' in r.message for r in caplog.records)
+    assert any('没有进展' in entry['msg'] for entry in job.snapshot()['logs'])   # 界面的日志里也有一句
+    # 暂停期间、任务结束后都不算
+    job._moved = t0 - 1000
+    interrupt.pause()
+    try:
+        assert watch.check() is None and job.snapshot()['idle'] == 0
+    finally:
+        interrupt.resume()
+    job.finish('done')
+    assert watch.check() is None and job.snapshot()['idle'] == 0
+
+
+def test_receiving_data_for_a_big_file_counts_as_progress():
+    import time
+    from pixiv_dl.progress import JobState
+    job = JobState('download')
+    job._moved = time.time() - 500
+    assert job.idle() >= 500
+    job.add_transfer(65536)
+    assert job.idle() < 1
+
+
+def test_fill_sizes_records_sizes_of_existing_files_without_touching_anything_else(stocked, cfg):
+    """补全文件大小：已下载、但没记大小的文件，把实际大小补进数据库；状态、文件都不动"""
+    import os
+    pro, api, _db = stocked
+    db = Database.local(cfg.DB_PATH)
+    pro.download()
+    done = db.conn.execute("SELECT task_key, file_size FROM illusts WHERE status = 1 AND media_type = 'image'").fetchall()
+    assert done and all(size for _, size in done)
+    real = dict(done)
+    db.conn.execute("UPDATE illusts SET file_size = NULL WHERE status = 1")
+    db.conn.commit()
+    before = db.conn.execute("SELECT task_key, status, attempts, download_date FROM illusts ORDER BY task_key").fetchall()
+    files = sorted(os.path.join(d, f) for d, _, fs in os.walk(cfg.LOCAL_SAVE_PATH) for f in fs)
+    stats = pro.verify_storage(apply=False, sizes=True)
+    assert stats['sizes'] >= len(real) and stats['missing'] == 0
+    assert dict(db.conn.execute("SELECT task_key, file_size FROM illusts WHERE status = 1 AND media_type = 'image'")) == real
+    assert db.conn.execute("SELECT task_key, status, attempts, download_date FROM illusts ORDER BY task_key").fetchall() == before
+    assert sorted(os.path.join(d, f) for d, _, fs in os.walk(cfg.LOCAL_SAVE_PATH) for f in fs) == files
+    assert pro.verify_storage(apply=False, sizes=True)['sizes'] == 0      # 再来一次：没有要补的了
+    assert '补上' in pro.job.snapshot()['logs'][-1]['msg']
+
+
+def test_big_file_shows_how_far_it_is_on_the_thread_line():
+    """大文件下载期间，那个线程的一行后面带着“下到多少 / 一共多少”"""
+    from pixiv_dl.progress import JobState
+    j = JobState('download')
+    j.worker_register('a', 2)
+    j.worker_begin('a', '[1] Alice · 105')
+    j.file_progress(34 * 1048576, 89 * 1048576)
+    assert j.snapshot()['workers'][0]['items'] == ['[1] Alice · 105 · 34 / 89 MB']
+    j.file_progress(0, 0)                                                # 下完了
+    assert j.snapshot()['workers'][0]['items'] == ['[1] Alice · 105']
+    j.file_progress(5, 10)                                               # 下一个文件
+    j.worker_end('a')
+    j.worker_begin('a', '[1] Alice · 106')
+    assert j.snapshot()['workers'][0]['items'] == ['[1] Alice · 106']    # 上一个作品的进度不会留下来
+
+
+def test_avatar_check_can_look_without_changing_records(cfg, no_sleep):
+    pro, api, db = avatar_setup(cfg, with_file_for=(10,))
+    r = pro.check_avatars(fix=False)
+    assert r['missing'] == 2 and r['fixed'] == 0
+    assert db.conn.execute("SELECT COUNT(*) FROM artists WHERE profile_image_local != ''").fetchone()[0] == 3   # 记录没动

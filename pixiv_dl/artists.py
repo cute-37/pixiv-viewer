@@ -153,9 +153,10 @@ class ArtistMixin:
         """头像文件夹里已经有头像的画师编号"""
         return set(self.avatar_files())
 
-    def check_avatars(self):
+    def check_avatars(self, fix=True):
         """核对头像：逐个画师看头像文件夹里是不是真的有文件，并把数据库里的记录改成和实际一致。
 
+        fix=False：只看不改（任务进行中也可以用）。
         不访问 Pixiv。数据库是从别处导入的话，记录里常常写着“有”，文件却不在这里——核对之后就准了。
         返回 {artists, have, missing, fixed, items: [{id, name}]}（已注销的画师不算在内）。
         """
@@ -171,11 +172,11 @@ class ArtistMixin:
                 missing.append({'id': aid, 'name': name or f"画师 {aid}"})
             if (local or '') != actual:
                 fixes.append((actual, aid))
-        if fixes:
+        if fixes and fix:
             with db.tx() as c:
                 c.executemany("UPDATE artists SET profile_image_local = ? WHERE author_id = ?", fixes)
         return {'artists': len(rows), 'have': len(rows) - len(missing), 'missing': len(missing),
-                'fixed': len(fixes), 'items': missing[:500]}
+                'fixed': len(fixes) if fix else 0, 'items': missing[:500]}
 
     @job_op('download_avatars')
     def download_missing_avatars(self, limit=None, force=False):

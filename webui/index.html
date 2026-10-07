@@ -64,6 +64,7 @@
     <symbol id="i-export" viewBox="0 0 16 16"><path d="M8 2.5v8M5 5.5l3-3 3 3M3 10v2.5c0 .6.4 1 1 1h8c.6 0 1-.4 1-1V10"/></symbol>
     <symbol id="i-wall" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="8.5" rx="1.2"/><path d="M6 14h4M8 11v3M4 9l2.5-2.5L8.5 8.5 10 7l2 2"/></symbol>
     <symbol id="i-bg" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M2.5 8h11M8 2.5v11"/></symbol>
+    <symbol id="i-locate" viewBox="0 0 16 16"><circle cx="8" cy="8" r="4.2"/><circle cx="8" cy="8" r="1" fill="currentColor"/><path d="M8 1.5v2.3M8 12.2v2.3M1.5 8h2.3M12.2 8h2.3"/></symbol>
     <symbol id="i-sort" viewBox="0 0 16 16"><path d="M5 3v10M2.5 10.5 5 13l2.5-2.5M11 13V3M8.5 5.5 11 3l2.5 2.5"/></symbol>
     <symbol id="i-cmd" viewBox="0 0 16 16"><path d="M5.5 5.5h5v5h-5zM5.5 5.5H4a1.5 1.5 0 1 1 1.5-1.5v1.5ZM10.5 5.5V4A1.5 1.5 0 1 1 12 5.5h-1.5ZM10.5 10.5H12a1.5 1.5 0 1 1-1.5 1.5v-1.5ZM5.5 10.5V12A1.5 1.5 0 1 1 4 10.5h1.5Z"/></symbol>
   </defs>
@@ -79,6 +80,7 @@
       <nav class="nav" id="nav" aria-label="资料库"></nav>
       <div class="sect">
         <span>画师</span><span class="n" id="artist-total"></span><span class="sp"></span>
+        <button class="icon-btn xs" id="btn-artist-locate" title="在列表里找到正在看的画师（画师页，或选中的作品的画师）" aria-label="定位当前画师"><svg class="i"><use href="#i-locate"/></svg></button>
         <button class="icon-btn xs" id="btn-folder-add" title="新建文件夹，用来给画师分类" aria-label="新建文件夹"><svg class="i"><use href="#i-folderplus"/></svg></button>
         <button class="icon-btn xs" id="btn-artist-sort" title="画师排序" aria-label="画师排序"><svg class="i"><use href="#i-sort"/></svg></button>
       </div>

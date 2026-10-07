@@ -7,6 +7,14 @@ from collections import deque
 from pixiv_dl import interrupt
 
 
+def _file_note(progress):
+    """大文件的下载进度，接在“正在处理什么”后面"""
+    if not progress:
+        return ''
+    got, total = progress
+    return f" · {got / 1048576:.0f} / {total / 1048576:.0f} MB"
+
+
 class JobState:
     """一次后台任务（同步/下载/核查…）的可观察状态，线程安全。CLI 和 Web 前端都读它。"""
 
@@ -22,6 +30,7 @@ class JobState:
         self.failed = 0
         self.skipped = 0
         self.bytes = 0
+        self._moved = time.time()   # 上一次有进展（做完一项，或收到数据）是什么时候
         self.transferred = 0  # 实际收到的字节数，边下边加（bytes 要等一个文件下完才加）；给界面算实时速度用
         self.message = ""
         self.error = None
@@ -39,8 +48,14 @@ class JobState:
     # ---- 写
     def add(self, **inc):
         with self._lock:
+            self._moved = time.time()
             for k, v in inc.items():
                 setattr(self, k, getattr(self, k) + v)
+
+    def idle(self, now=None):
+        """已经多少秒没有任何进展了（做完一项，或正在下载的文件收到数据，都算进展）"""
+        with self._lock:
+            return max(0.0, (now or time.time()) - self._moved)
 
     def set(self, **kw):
         with self._lock:
@@ -50,6 +65,7 @@ class JobState:
     def tally(self, group, key, name=None, note=None, kind=None, **inc):
         """累计明细：detail[group][key] = {name, note, kind, 计数...}。线程安全。"""
         with self._lock:
+            self._moved = time.time()           # 记下了新结果（比如检查时发现了新作品）也算有进展
             entry = self.detail.setdefault(group, {}).setdefault(str(key), {})
             if name is not None:
                 entry['name'] = name
@@ -76,13 +92,14 @@ class JobState:
         with self._lock:
             self.workers[name] = {'name': name, 'role': role, 'threads': int(threads), 'alive': int(threads), 'active': 0,
                                   'state': 'queue', 'text': '', 'note': '', 'success': 0, 'failed': 0, 'bytes': 0,
-                                  'tasks': {}}     # 每个线程正在处理什么：{线程编号: 文字}（一个账号可以有几个线程）
+                                  'tasks': {}, 'files': {}}     # 每个线程正在处理什么：{线程编号: 文字}（一个账号可以有几个线程）
 
     def worker_begin(self, name, text):
         with self._lock:
             w = self.workers.get(name)
             if w:
                 w['active'] += 1
+                self._moved = time.time()       # 开始处理下一项
                 w['state'] = 'working'
                 w['text'] = text
                 w['tasks'][threading.get_ident()] = text
@@ -93,6 +110,7 @@ class JobState:
             if w:
                 w['active'] = max(0, w['active'] - 1)
                 w['tasks'].pop(threading.get_ident(), None)
+                w['files'].pop(threading.get_ident(), None)
                 if w['state'] != 'stopped' and w['active'] == 0:
                     w['state'] = state
 
@@ -106,6 +124,23 @@ class JobState:
         """正在下载的文件又收到 n 个字节。大文件（动图压缩包几十上百 MB）下载期间，文件数很久不变，靠它看得出还在动。"""
         with self._lock:
             self.transferred += n
+            self._moved = time.time()
+
+    def file_progress(self, got, total):
+        """当前线程正在下载的大文件收到了多少（got / total 字节）。total 为 0 表示这个文件下完了。
+
+        只给大文件用（见 downloader.BIG_FILE）：一个动图压缩包可能要下一两分钟，这期间文件数不动，
+        界面在这个线程那一行后面显示“34 / 89 MB”，看得出它在动、还要多久。
+        """
+        me = threading.get_ident()
+        with self._lock:
+            for w in self.workers.values():
+                if me in w['tasks']:
+                    if total:
+                        w['files'][me] = (got, total)
+                    else:
+                        w['files'].pop(me, None)
+                    return
 
     def worker_add(self, name, **inc):
         with self._lock:
@@ -150,9 +185,12 @@ class JobState:
                 "failed": self.failed, "skipped": self.skipped, "bytes": self.bytes, "transferred": self.transferred,
                 "message": self.message, "error": self.error, "result": self.result,
                 "started": self.started, "finished": self.finished, "elapsed": round(elapsed, 1),
-                "current": dict(self.current), "workers": [{**{k: v for k, v in w.items() if k != 'tasks'}, 'items': list(w['tasks'].values())}
-                                                           for w in self.workers.values()], "stopping": self.stopping, "run_id": self.run_id,
+                "current": dict(self.current), "workers": [{**{k: v for k, v in w.items() if k not in ('tasks', 'files')},
+                             'items': [text + _file_note(w['files'].get(tid)) for tid, text in w['tasks'].items()]}
+                            for w in self.workers.values()], "stopping": self.stopping, "run_id": self.run_id,
                 "paused": self.status == "running" and interrupt.is_paused(),
+                # 多久没有进展了（秒）。暂停、结束时为 0；界面超过两分钟会提示
+                "idle": round(time.time() - self._moved) if self.status == "running" and not interrupt.is_paused() else 0,
                 "detail": {g: {k: dict(v) for k, v in d.items()} for g, d in self.detail.items()},
             }
             if with_logs:

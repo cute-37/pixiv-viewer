@@ -595,8 +595,8 @@ class Database(QueryMixin):
             "LEFT JOIN illust_metadata m ON i.illust_id = m.illust_id WHERE i.status = 1").fetchall()
 
     def get_storage_check_list(self, author_id=None):
-        """核查用：task_key, illust_id, page_index, author_id, title, url, media_type, status"""
-        q = ("SELECT i.task_key, i.illust_id, i.page_index, m.author_id, m.title, i.url, i.media_type, i.status "
+        """核查用：task_key, illust_id, page_index, author_id, title, url, media_type, status, file_size"""
+        q = ("SELECT i.task_key, i.illust_id, i.page_index, m.author_id, m.title, i.url, i.media_type, i.status, i.file_size "
              "FROM illusts i LEFT JOIN illust_metadata m ON i.illust_id = m.illust_id")
         params = []
         if author_id:
@@ -747,6 +747,14 @@ class Database(QueryMixin):
             c.executemany("UPDATE illusts SET status = 1, attempts = 0, updated_at = ?, "
                           "download_date = COALESCE(download_date, ?), file_size = ? WHERE task_key = ?",
                           [(now, now, size, key) for key, size in items])
+        return len(items)
+
+    def bulk_set_sizes(self, items):
+        """items: [(task_key, file_size)] → 只补文件大小，别的都不动。"""
+        if not items:
+            return 0
+        with self.tx() as c:
+            c.executemany("UPDATE illusts SET file_size = ? WHERE task_key = ?", [(size, key) for key, size in items])
         return len(items)
 
     def update_file_info(self, task_key, file_hash, file_size, original_filename=None, content_type=None):

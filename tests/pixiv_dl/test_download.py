@@ -501,3 +501,24 @@ def test_each_thread_of_an_account_reports_what_it_is_doing():
     done.set()
     t.join()
     assert j.snapshot()['workers'][0]['items'] == []
+
+
+def test_deleted_novel_reported_as_parse_error_is_still_recognised_as_gone(cfg, no_sleep):
+    """小说被删后 Pixiv 返回一小段“Page not found”，pixivpy 只会说“解析失败”。要认出这是“找不到”，不再反复重试"""
+    api = FakeAPI()
+
+    def webview_novel(novel_id, raw=False, **kw):
+        api._log('webview_novel', novel_id)
+        body = '{"error":{"user_message":"Page not found","message":"","reason":"","user_message_details":{}}}'
+        if raw:
+            return body
+        raise Exception("Extract novel content error: 'NoneType' object has no attribute 'groups'")
+
+    api.webview_novel = webview_novel
+    pro, _ = make_processor(api)
+    db = Database.local(cfg.DB_PATH)
+    db.upsert_artist(1, 'Alice')
+    db.save_novel(902, 1, 'N')
+    pro.download()
+    status, attempts, kind = db.conn.execute("SELECT status, attempts, error_kind FROM illusts").fetchone()
+    assert (status, attempts) == (-1, cfg.MAX_ATTEMPTS) and kind != 'other'

@@ -68,6 +68,8 @@ def describe(job: dict) -> tuple:
     parts = []
     if kind == "download_avatars":
         parts.append(f"下载了 {job.get('success', 0)} 个头像")
+    elif kind == "fill_sizes":
+        parts.append(f"补上了 {result.get('sizes', 0)} 个文件的大小")
     else:
         if "artists" in result:
             parts.append(f"检查了 {result.get('artists_ok', 0)} 位画师")

@@ -208,6 +208,7 @@ export function createTasks(D) {
         <span class="sp"></span><span>已用 ${fmtDur(job.elapsed || 0)}${eta ? ` · 约剩 ${eta}` : ""}</span>
       </div>
       ${job.message ? `<p class="dl-hint">${esc(job.message)}</p>` : ""}
+      ${!job.paused && job.idle >= 120 ? `<p class="dl-hint warn">${icon("clock")}已经 ${fmtDur(job.idle)} 没有新进展，仍在等待。通常是被限速、网络不通或保存位置响应慢，看下面每个账号的状态；一直不恢复的话可以停止后重新开始，进度会保留。</p>` : ""}
       ${api.jobWatch ? `<div class="dl-after"><span>完成后</span>${afterSelect()}</div>` : ""}
       ${workers.length ? `<div class="dl-workers">${workers.map(workerRows).join("")}</div>` : ""}
       ${state.logsOpen ? logBox() : logs.length ? `<div class="dl-logs">${logs.map((l) => `<div>${esc(l.msg)}</div>`).join("")}</div>` : ""}
@@ -233,6 +234,12 @@ export function createTasks(D) {
     const notes = [];
     if (res.needs_review) notes.push(`<div class="dl-hintrow strong">${icon("info")}<span>新发现的文件比较多，还没有开始下载。先看看都是谁的，再决定下哪些。</span><button class="btn primary" data-dl="review">查看并选择</button></div>`);
     const avatarJob = job.kind === "download_avatars";
+    if (job.kind === "fill_sizes") {
+      nums.length = 0;
+      nums.push(`<span>检查了 <b>${fmtNum(res.checked || 0)}</b> 个文件</span>`, `<span>补上 <b>${fmtNum(res.sizes || 0)}</b> 个的大小</span>`);
+      if (res.skipped_artists) nums.push(`<span>${fmtNum(res.skipped_artists)} 位画师的文件夹读不到，跳过</span>`);
+      if (res.missing) notes.push(`<div class="dl-hintrow">${icon("info")}<span>另外有 <b>${fmtNum(res.missing)}</b> 个文件记录着“已下载”，但保存位置里没有找到。这次没有改动它们。</span></div>`);
+    }
     if (avatarJob) {
       nums.length = 0;
       nums.push(`<span>下载了 <b>${fmtNum(job.success || 0)}</b> 个头像</span>`);
@@ -316,8 +323,9 @@ export function createTasks(D) {
 
   // ================================================================ 失败处理页
   async function loadFailed() {
-    const [files, artists] = await Promise.all([dl("GET", "/api/failures"), dl("GET", "/api/sync/failures")]);
-    state.failures = files; state.syncFails = artists;
+    const [files, artists, avatars] = await Promise.all([dl("GET", "/api/failures"), dl("GET", "/api/sync/failures"),
+      dl("POST", "/api/avatars/check", { dry: true }).catch(() => null)]);     // 缺头像的画师：只看头像文件夹，不访问 Pixiv
+    state.failures = files; state.syncFails = artists; state.noAvatar = avatars;
     if (state.failList) await loadFailList(state.failList.kind, state.failList.status, state.failList.page);
   }
   async function loadFailList(kind, status = "failed", page = 1) {
@@ -329,10 +337,12 @@ export function createTasks(D) {
   function pageFailed() {
     const f = state.failures || { groups: [], ignored: 0 }, s = state.syncFails || { groups: [], total: 0, skipped: [] };
     const fileTotal = f.groups.reduce((n, g) => n + g.count, 0);
+    const av = state.noAvatar || { missing: 0, items: [], artists: 0 };
     const tabs = `<div class="dl-tabs"><div class="seg">
       <button data-dl="fail-tab" data-tab="files" class="${state.failTab === "files" ? "on" : ""}">下载失败的文件${fileTotal ? `<span class="n">${fmtNum(fileTotal)}</span>` : ""}</button>
-      <button data-dl="fail-tab" data-tab="artists" class="${state.failTab === "artists" ? "on" : ""}">检查失败的画师${s.total ? `<span class="n">${fmtNum(s.total)}</span>` : ""}</button></div></div>`;
-    return tabs + (state.failTab === "artists" ? artistsTab(s) : filesTab(f, fileTotal));
+      <button data-dl="fail-tab" data-tab="artists" class="${state.failTab === "artists" ? "on" : ""}">检查失败的画师${s.total ? `<span class="n">${fmtNum(s.total)}</span>` : ""}</button>
+      <button data-dl="fail-tab" data-tab="avatars" class="${state.failTab === "avatars" ? "on" : ""}">缺头像的画师${av.missing ? `<span class="n">${fmtNum(av.missing)}</span>` : ""}</button></div></div>`;
+    return tabs + (state.failTab === "artists" ? artistsTab(s) : state.failTab === "avatars" ? avatarsTab(av) : filesTab(f, fileTotal));
   }
   function taskRows(list) {
     if (!list.items.length) return `<div class="dl-empty"><b>没有了</b></div>`;
@@ -370,6 +380,15 @@ export function createTasks(D) {
       ${f.ignored ? `<div class="group"><div class="set"><div class="t">已忽略 ${fmtNum(f.ignored)} 个<small>忽略的文件不会再自动重试，也不计入失败。</small></div><div class="ctl">
         <button class="btn ghost" data-dl="${open && open.status === "ignored" ? "list-close" : "list-open"}" data-status="ignored">${open && open.status === "ignored" ? "收起" : "查看"}</button><button class="btn" data-dl="restore">全部恢复</button></div></div>
         ${open && open.status === "ignored" ? taskRows(open) : ""}</div>` : ""}`;
+  }
+  // 缺头像的画师：补全没成功的、导入数据后还没补的都在这里，随时能看到（不依赖上一次任务的结果）
+  function avatarsTab(av) {
+    if (!av.missing) return `<div class="dl-empty">${icon("check")}<b>所有画师都有头像</b><span>哪位画师的头像没下载下来，会列在这里。</span></div>`;
+    return `<div class="group"><div class="set"><div class="t">${fmtNum(av.missing)} 位画师还没有头像<small>“补全”会把这些头像下回来；有的画师已经注销或换了地址，可能一直补不上。</small></div>
+        <div class="ctl"><button class="btn primary" data-dl="fill-avatars" ${running() ? "disabled" : ""}>补全…</button></div></div></div>
+      <div class="group"><div class="dl-tasklist">${av.items.map((x) => `<div class="dl-task"><div class="t"><b>${esc(x.name)}</b><span class="by">ID ${x.id}</span></div>
+        <div class="ctl"><button class="btn ghost" data-dl="open-url" data-url="${pixivUser(x.id)}" title="在浏览器里打开这位画师的主页">Pixiv</button></div></div>`).join("")}
+        ${av.missing > av.items.length ? `<div class="dl-task"><div class="t"><span class="by">还有 ${fmtNum(av.missing - av.items.length)} 位没有列出</span></div></div>` : ""}</div></div>`;
   }
   function artistsTab(s) {
     if (!s.groups.length && !s.skipped.length) return `<div class="dl-empty">${icon("check")}<b>没有检查失败的画师</b><span>检查时某位画师没查成功，会列在这里，可以单独重查。</span></div>`;

@@ -41,6 +41,23 @@ export function renderSide() {
   $("#artist-total").textContent = ctx.lib.artists.length;
   $$(".side-rail [data-nav]").forEach((b) => b.classList.toggle("on", b.dataset.nav === view.scope));
 }
+// 正在看的是哪位画师：画师页就是他；在“全部图片”等地方，是选中的（或看图页里打开的）那个作品的画师
+function currentArtistKey() {
+  if (view.scope === "artist") return view.artist;
+  const w = view.cur && ctx.workByKey ? ctx.workByKey(view.cur) : null;
+  return w && ctx.artistByKey(w.artistKey) ? w.artistKey : null;
+}
+/** 在侧栏里找到正在看的这位画师：筛选框里有字就清掉，滚到他那一行并闪一下 */
+export function locateArtist() {
+  const key = currentArtistKey();
+  if (!key) return toast("先打开一位画师，或选中一个作品");
+  if ($("#artist-filter").value) { $("#artist-filter").value = ""; renderSide(); }
+  const rows = $$("#artists .row-btn[data-artist]").filter((b) => b.dataset.artist === key);
+  const row = rows.find((b) => !b.classList.contains("sub")) || rows[0]; if (!row) return;
+  row.scrollIntoView({ block: "center" });
+  row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash");
+}
+$("#btn-artist-locate").addEventListener("click", locateArtist);
 export function avatarHTML(a, cls = "") {
   const style = a.avatar ? `background-image:url('${a.avatar}')` : `background:${a.color || "#8b8b93"}`;
   return `<span class="avatar ${cls}" style="${style}">${a.avatar ? "" : esc(a.name.slice(0, 1))}</span>`;

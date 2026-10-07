@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import os
 import queue
@@ -17,7 +18,7 @@ from pixiv_dl import interrupt, netwatch, ratelimit, visibility
 from pixiv_dl.config import Config
 from pixiv_dl.database import Database, ST_DONE, ST_FAILED
 from pixiv_dl.extract import _g, extract_pages, is_visible, ugoira_info, ugoira_zip_candidates, url_ext
-from pixiv_dl.pixiv_client import AUTH, INTERRUPTED, NOT_FOUND, RATE_LIMIT
+from pixiv_dl.pixiv_client import AUTH, INTERRUPTED, NOT_FOUND, RATE_LIMIT, classify_error
 from pixiv_dl.progress import job_op
 from pixiv_dl.ugoira import convert_ugoira
 
@@ -25,6 +26,8 @@ logger = logging.getLogger("PixivDownloader")
 
 # 这些状态码重试没有意义：地址已失效/无权限
 _NO_RETRY_STATUS = (400, 401, 403, 404, 410)
+# 超过这么大的文件，下载期间在界面上显示“下到多少了”（多半是动图的压缩包）
+BIG_FILE = 8 * 1024 * 1024
 
 
 class NetError(Exception):
@@ -169,20 +172,27 @@ class DownloadMixin:
                 raise TimeoutError("等待主机并发令牌超时")
             try:
                 resp = self.session.get(url, timeout=(10, 30), stream=True)
+                big = False
                 try:
                     if resp.status_code != 200:
                         raise HttpStatus(resp.status_code)
                     total = int(resp.headers.get('content-length') or 0)
-                    chunks = []
+                    big = total >= BIG_FILE
+                    chunks, got = [], 0
                     for chunk in resp.iter_content(chunk_size=65536):
                         if interrupt.is_set():
                             raise InterruptedError("下载被中断")
                         if chunk:
                             chunks.append(chunk)
+                            got += len(chunk)
                             self.job.add_transfer(len(chunk))
+                            if big:
+                                self.job.file_progress(got, total)
                     data = b''.join(chunks)
                 finally:
                     resp.close()
+                    if big:
+                        self.job.file_progress(0, 0)
                 if total and not resp.headers.get('content-encoding') and len(data) != total:
                     raise NetError(f"下载不完整 ({len(data)}/{total} bytes)")
                 if len(data) < 100:
@@ -466,8 +476,12 @@ class DownloadMixin:
             if fn is None:
                 continue
             res, err = client.call(fn, iid)
+            if err and 'Extract novel content' in err.message:
+                # 小说已删除或这个账号看不到时，Pixiv 返回的是一小段错误信息而不是小说页面；
+                # pixivpy 只会报“解析失败”。再看一眼原始内容，弄清楚真正的原因（找不到 / 限速 / 登录失效）
+                err = self._novel_page_error(client, iid) or err
             if err:
-                if err.kind in (NOT_FOUND, AUTH, INTERRUPTED):
+                if err.kind in (NOT_FOUND, AUTH, INTERRUPTED, RATE_LIMIT):
                     self._raise_api_error(err, f"获取小说 {iid} 失败")
                 errors.append(str(err))
                 continue
@@ -476,6 +490,18 @@ class DownloadMixin:
                 if isinstance(v, str) and v.strip():
                     return v
         raise _GroupError("未能获取小说正文: " + "; ".join(errors) if errors else "未能获取小说正文")
+
+    @staticmethod
+    def _novel_page_error(client, iid):
+        """小说页面解析不了时：把 Pixiv 实际返回的错误归好类。不是错误信息（比如页面结构真的变了）返回 None。"""
+        try:
+            raw = client.api.webview_novel(iid, raw=True)
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return None
+        if isinstance(data, dict) and data.get('error'):
+            return classify_error(data)
+        return None
 
     def _raise_api_error(self, err, prefix):
         if err.kind == INTERRUPTED:

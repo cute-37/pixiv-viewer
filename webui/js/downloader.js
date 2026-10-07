@@ -20,7 +20,7 @@ const settingsKey = (page) => ({ general: "general", home: "library" }[page] || 
 const KIND_LABEL = {
   sync: "检查更新", sync_download: "检查更新并下载", download: "下载", sync_artist: "检查这位画师", download_artist: "下载这位画师的作品",
   sync_download_artist: "更新这位画师", sync_artist_download: "更新这位画师", sync_artists: "检查所选画师", download_artists: "下载所选画师", sync_download_artists: "更新所选画师",
-  verify: "核查文件", refresh_profiles: "刷新画师资料", download_avatars: "补全头像", db_vacuum: "压缩数据库", idle: "空闲",
+  verify: "核查文件", refresh_profiles: "刷新画师资料", download_avatars: "补全头像", fill_sizes: "补全文件大小", db_vacuum: "压缩数据库", idle: "空闲",
   retry_now: "重试失败的文件", recheck_gone: "复核已注销的画师",
 };
 const STATUS_LABEL = { running: "进行中", done: "已完成", cancelled: "已停止", error: "出错了" };
@@ -548,6 +548,9 @@ export function initDownloader(ctx) {
       ${imp.results ? `<div class="dl-picked">${imp.results.map((r) => `<div class="${r.ok ? "ok" : "bad"}">${icon(r.ok ? "check" : "x")}<div><b>${esc(r.label)}</b>
           <small>${esc(r.message || (r.ok ? "已导入" : "没有成功"))}${r.kept ? `<br>原来的那份保留在：<span class="mono">${esc(r.kept)}</span>` : ""}</small></div></div>`).join("")}</div>` : ""}
     </div>
+    <div class="group"><div class="gh">维护</div>
+      <div class="set"><div class="t">补全文件大小${hintHTML("早期下载的和导入的记录大多没有记文件大小，“待下载大约多大”的估算因此不准。这一项把保存位置里的文件逐个文件夹看一遍，把大小补进数据库。不访问 Pixiv、不改动任何文件；图库在网络共享上时要花几分钟，可以随时停止，已经补上的会保留。")}</div>
+        <div class="ctl"><button class="btn" data-dl="fill-sizes" ${have("works_db") && !jobRunning() ? "" : "disabled"}>开始…</button></div></div></div>
     <div class="group"><div class="gh">说明</div><div class="dl-about">
       ${solo ? `<p>想换电脑或备份，把数据文件夹整个拷走即可；想恢复成全新状态，关闭程序后删掉它。里面的 settings.json 含有登录凭证，不要发给别人。</p>`
         : `<p>下载在后台以独立的进程运行，下载再忙也不影响看图，也不占用网络端口；关闭查看器时会处理完当前文件再退出。</p>`}
@@ -708,6 +711,11 @@ export function initDownloader(ctx) {
       state.plan = null; state.accounts = null; state.settings = null;
       if (!solo) { await ctx.reloadLibrary(); ctx.loadWorks(); }
       return draw();
+    }
+    if (act === "fill-sizes") {
+      const c = { kind: "fill_sizes", simple: true, title: "补全文件大小", text: "把保存位置里已有文件的大小补进数据库。不访问 Pixiv、不改动任何文件，可以随时停止。" };
+      if (solo) { mount("update"); state.confirm = c; return; }
+      return void ctx.openDownloader("update").then(() => { state.confirm = c; draw(); });
     }
     if (act === "check-avatars") {
       state.avatars = { pending: true }; draw();

@@ -241,6 +241,7 @@ class JobRunner:
             'download_artists': lambda: pro.download(aids=ids()),
             'sync_download_artists': lambda: pro.sync_and_download_artists(ids()),
             'verify': lambda: pro.verify_storage(apply=bool(p.get('apply'))),
+            'fill_sizes': lambda: pro.verify_storage(apply=False, sizes=True),
             'refresh_profiles': lambda: pro.refresh_all_artist_profiles(only_missing=not p.get('all'), limit=limit()),
             'download_avatars': lambda: pro.download_missing_avatars(limit=limit(), force=bool(p.get('all'))),
             'db_vacuum': lambda: pro.db_vacuum(),
@@ -490,6 +491,8 @@ def api_pending_summary(r):
 @route("POST", r"/api/avatars/check")
 def api_avatars_check(r):
     """核对头像：头像文件夹里实际有哪些、还缺谁的，并把数据库里的记录改成和实际一致。不访问 Pixiv。"""
+    if r.body.get("dry"):                       # 只看不改：任务进行中也可以
+        return r.app.pro.check_avatars(fix=False)
     if r.app.runner.running:
         raise HttpError(409, "任务运行中，结束后再核对")
     return r.app.pro.check_avatars()

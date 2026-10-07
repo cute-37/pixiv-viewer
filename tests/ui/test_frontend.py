@@ -878,3 +878,50 @@ def test_running_card_shows_every_thread_of_an_account(page):
     backup = [i for i, r in enumerate(rows) if r[0].startswith("backup")]
     assert len(backup) == 1 and "×2" in rows[backup[0]][0]
     assert "线程一" in rows[backup[0]][1] and rows[backup[0] + 1][0] == "" and "线程二" in rows[backup[0] + 1][1]
+
+
+def test_locate_button_finds_the_current_artist_in_the_sidebar(page):
+    """侧栏“定位”按钮：滚到正在看的画师（画师页，或选中的作品的画师），筛选框里有字也先清掉"""
+    visible = """() => { const r = document.querySelector('#artists .row-btn.flash'); if (!r) return null;
+        const b = r.getBoundingClientRect(), o = document.querySelector('#artists').getBoundingClientRect();
+        return [r.dataset.artist, b.top >= o.top - 1 && b.bottom <= o.bottom + 1]; }"""
+    page.click("#btn-artist-locate")                                     # 什么都没选：提示一下
+    assert "先打开一位画师" in page.locator("#toast-t").inner_text()
+    page.locator("#grid-root .tile").first.click()                       # 在“全部图片”里选中一个作品
+    key = page.evaluate("async () => { const { ctx, view } = await import('./js/state.js'); return ctx.workByKey(view.cur).artistKey; }")
+    page.fill("#artist-filter", "zzzz-nobody")
+    page.evaluate("document.querySelector('#artists').scrollTop = 1e6")
+    page.click("#btn-artist-locate")
+    page.wait_for_function("!!document.querySelector('#artists .row-btn.flash')")
+    assert page.evaluate(visible) == [key, True] and page.input_value("#artist-filter") == ""
+    last = page.evaluate("[...document.querySelectorAll('#artists .row-btn[data-artist]:not(.sub)')].pop().dataset.artist")
+    page.locator(f'#artists .row-btn[data-artist="{last}"]:not(.sub)').first.click()   # 画师页
+    page.locator('#title-area [data-act="folders"]').wait_for()
+    page.evaluate("document.querySelector('#artists').scrollTop = 0")
+    page.click("#btn-artist-locate")
+    page.wait_for_function("!!document.querySelector('#artists .row-btn.flash')")
+    assert page.evaluate(visible) == [last, True]
+
+
+def test_failed_page_lists_artists_without_avatar(page):
+    """失败处理页有“缺头像的画师”一栏：随时能看到缺谁的，并从这里补全"""
+    open_dl(page)
+    page.click("[data-dlpage=failed]")
+    tab = page.locator("[data-dl=fail-tab][data-tab=avatars]")
+    tab.wait_for()
+    assert "2" in tab.inner_text()
+    tab.click()
+    page.wait_for_selector(".dl-tasklist .dl-task")
+    assert "2 位画师还没有头像" in page.locator("#dl-page").inner_text()
+    page.locator("#dl-page").get_by_role("button", name="补全…").click()
+    page.get_by_text("补全头像").first.wait_for()
+
+
+def test_fill_sizes_is_offered_under_maintenance(page):
+    page.keyboard.press("Control+,")
+    page.locator('.dnav [data-page="dl-link"]').click()
+    row = page.locator(".set", has_text="补全文件大小")
+    row.wait_for()
+    row.get_by_role("button", name="开始…").click()
+    page.locator(".dl-confirm").wait_for()
+    assert "不访问 Pixiv" in page.locator(".dl-confirm").inner_text()

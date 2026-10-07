@@ -42,6 +42,9 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
         self._keep_awake = KeepAwake(lambda: bool(getattr(Config, 'KEEP_AWAKE', True)) and self.job.running
                                      and not interrupt.is_paused())
 
+        from pixiv_dl.stallwatch import StallWatch
+        self._stall_watch = StallWatch(lambda: self.job)
+
         self.session = requests.Session()
         proxy.configure_session(self.session)
         self.session.headers.update({
@@ -140,6 +143,7 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
 
     def _on_job_start(self, job):
         """同步/下载开始前，如果距离上次备份已超过设定天数，先自动备份一次数据库。"""
+        self._stall_watch.start()         # 长时间没有进展时记进日志（只记录，不干预）
         self._keep_awake.start()          # 任务进行时不让电脑自动睡眠（设置里可以关）
         if job.kind not in self._AUTO_BACKUP_KINDS:
             return
@@ -314,13 +318,15 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
 
     # ------------------------------------------------------------------ 存储一致性核查
     @job_op('verify')
-    def verify_storage(self, apply=False, author_id=None):
+    def verify_storage(self, apply=False, author_id=None, sizes=False):
         """对比数据库与存储里的实际文件。
 
         - 库里 "已下载" 但文件缺失/损坏 → 重置为待下载
         - 库里非 "已下载" 但文件完好 → 标记为已下载
         按画师目录整体列目录（而不是逐文件查询），NAS 上快得多。
         apply=False 只统计不修改（预览）。存储读取失败的画师会被跳过，绝不当作"文件缺失"处理。
+        sizes=True：另外把“已下载、但数据库里没记大小”的文件的实际大小补进数据库（只补这一个数，别的不动）。
+        早期下载的和导入的记录大多没有大小，补上之后“待下载大约多大”的估算才准。
         返回统计字典。
         """
         db = self.db
@@ -332,10 +338,10 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
         by_artist = {}
         for t in tasks:
             by_artist.setdefault(t[3] or 0, []).append(t)
-        job.set(total=len(by_artist), phase="核查" if apply else "核查（预览）")
+        job.set(total=len(by_artist), phase="补全文件大小" if sizes else "核查" if apply else "核查（预览）")
 
         stats = {'checked': 0, 'ok': 0, 'missing': 0, 'restored': 0, 'skipped_artists': 0}
-        to_reset, to_restore, samples = [], [], []
+        to_reset, to_restore, samples, to_size = [], [], [], []
         for aid, ts in by_artist.items():
             if interrupt.is_set():
                 break
@@ -355,7 +361,7 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
                 v = d.get(name)
                 return 0 if v is None or v[0] else v[1]
 
-            for key, iid, idx, _aid, _title, url, mt, status in ts:
+            for key, iid, idx, _aid, _title, url, mt, status, known in ts:
                 stats['checked'] += 1
                 if mt == 'ugoira':
                     zsize = max(size_of(sub, f"{iid}_p0.zip"), size_of(sub, f"{iid}_p0.bin"))
@@ -377,6 +383,13 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
                         samples.append(key)
                 else:
                     stats['ok'] += 1
+                    if sizes and exists and not known:
+                        to_size.append((key, fsize))
+            if len(to_size) >= 5000:                 # 边查边存：中途停止也不白做
+                stats['sizes'] = stats.get('sizes', 0) + db.bulk_set_sizes(to_size)
+                to_size = []
+        if sizes:
+            stats['sizes'] = stats.get('sizes', 0) + db.bulk_set_sizes(to_size)
         stats['samples_missing'] = samples
         if apply and not interrupt.is_set():
             db.bulk_set_status(to_reset, 0)
@@ -385,6 +398,10 @@ class Processor(SyncMixin, DownloadMixin, ArtistMixin):
         job.set(result=stats)
         summary = (f"核查{'完成' if apply else '预览'}：检查 {stats['checked']}，正常 {stats['ok']}，"
                    f"缺失 {stats['missing']}，找回 {stats['restored']}，跳过画师 {stats['skipped_artists']}")
+        if sizes:
+            summary = (f"补全文件大小：检查了 {stats['checked']} 个文件，补上 {stats['sizes']} 个的大小"
+                       + (f"；{stats['missing']} 个记录着已下载但文件不在" if stats['missing'] else "")
+                       + (f"；{stats['skipped_artists']} 位画师的文件夹读不到，跳过" if stats['skipped_artists'] else ""))
         logger.info(summary)
         job.log(summary)
         return stats
