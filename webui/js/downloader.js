@@ -1,16 +1,22 @@
 // 下载与更新：查看器内置的 Pixiv 下载功能（后端是项目里的 pixiv_dl 模块）。
-// 更新（检查新作品并下载，带进度）、失败处理、账号、保存位置、下载选项、数据。
+// 更新（检查新作品并下载，带进度）、失败处理、账号、保存位置、下载内容、速度与网络、数据导入、常规。
 // 下载在独立的进程里跑，这里通过 ctx.api.dl(method, path, body, query) 调它的接口。
 import { $, $$, esc, icon, toast, fmtNum } from "./util.js";
 import { createTasks } from "./dl_tasks.js";
+import { hintHTML } from "./help.js";
 
-// 两组页面：操作（更新、失败处理）在“下载与更新”面板里；设置（账号、保存位置、下载选项、数据）并入软件的“设置”。
+// 两组页面：操作（更新、失败处理）在“下载与更新”面板里；设置（账号、保存位置、下载内容、速度与网络、数据导入、常规）并入软件的“设置”。
 // 独立的下载器程序没有另外的设置窗口，两组都在同一个侧栏里，分成“下载”“设置”两段。
 const OPS = [["update", "更新", "sync"], ["failed", "失败处理", "warn"]];
-const SETS = [["accounts", "Pixiv 账号", "user"], ["storage", "保存位置", "drive"], ["options", "下载选项", "sliders"], ["link", "数据与导入", "link"]];
-const PAGES = [...OPS, ...SETS];
-const isSetting = (page) => SETS.some((x) => x[0] === page);
+// 设置页：下载内容（下什么）和速度与网络（多快、怎么连）分开；和下载内容无关的程序行为（通知、睡眠）放在“常规”。
+// home（数据文件夹那一组）不单独成页：查看器里嵌在“图库”页，独立的下载器里放在“数据导入”页顶上。
+const SETS = [["accounts", "Pixiv 账号", "user"], ["storage", "保存位置", "drive"], ["content", "下载内容", "dl"], ["speed", "速度与网络", "sliders"],
+  ["link", "数据导入", "link"], ["general", "常规", "gear"]];
+const PAGES = [...OPS, ...SETS, ["home", "数据文件夹", "folder"]];
+const isSetting = (page) => page === "home" || SETS.some((x) => x[0] === page);
 export const DL_SETTINGS_PAGES = SETS;
+/** 下载器的某一页在查看器的“设置”对话框里叫什么 */
+const settingsKey = (page) => ({ general: "general", home: "library" }[page] || "dl-" + page);
 const KIND_LABEL = {
   sync: "检查更新", sync_download: "检查更新并下载", download: "下载", sync_artist: "检查这位画师", download_artist: "下载这位画师的作品",
   sync_download_artist: "更新这位画师", sync_artist_download: "更新这位画师", sync_artists: "检查所选画师", download_artists: "下载所选画师", sync_download_artists: "更新所选画师",
@@ -96,7 +102,7 @@ export function initDownloader(ctx) {
   const navBtn = ([k, t, ic]) => `<button class="row-btn" data-dlpage="${k}">${icon(ic)}<span class="lbl">${t}</span><span class="n" data-dlbadge="${k}"></span></button>`;
   ctx.openDownloader = async (page) => {
     page = page || (solo ? state.page : "update");
-    if (!solo && isSetting(page)) return ctx.openSettings("dl-" + page);      // 设置类的页面在“设置”里
+    if (!solo && isSetting(page)) return ctx.openSettings(settingsKey(page));      // 设置类的页面在“设置”里
     scrim.innerHTML = solo
       ? `<div class="dialog dlc" role="dialog" aria-label="Pixiv 下载器">
           <nav class="dnav"><div class="dt"><span class="logo">P</span>Pixiv 下载器</div>
@@ -106,7 +112,7 @@ export function initDownloader(ctx) {
           <div class="dmain"><div class="dhead"><h3>下载与更新</h3>
             <div class="seg" role="tablist">${OPS.map(([k, t]) => `<button data-dlpage="${k}" role="tab">${t}<span class="n" data-dlbadge="${k}"></span></button>`).join("")}</div>
             <span class="sp"></span>
-            <button class="btn ghost" data-dlgo="accounts" title="账号、保存位置、下载选项、数据与导入都在“设置”里">${icon("gear")}下载设置</button>
+            <button class="btn ghost" data-dlgo="accounts" title="账号、保存位置、下载内容、速度与网络都在“设置”里">${icon("gear")}下载设置</button>
             <button class="icon-btn" data-dlclose title="关闭 (Esc)" aria-label="关闭">${icon("x")}</button></div>
           <div class="dpage" id="dl-page"></div></div></div>`;
     scrim.hidden = false;
@@ -132,9 +138,9 @@ export function initDownloader(ctx) {
   // 换页：操作页和设置页不在同一个窗口里时，换到对应的窗口
   function go(page) {
     const inSettings = !!scrim.querySelector("#dl-page.dl-host");
-    if (!solo && isSetting(page) && !inSettings) return ctx.openSettings("dl-" + page);
+    if (!solo && isSetting(page) && !inSettings) return ctx.openSettings(settingsKey(page));
     if (!solo && !isSetting(page) && inSettings) return ctx.openDownloader(page);
-    if (!solo && inSettings && page !== state.page) return ctx.openSettings("dl-" + page);
+    if (!solo && inSettings && page !== state.page) return ctx.openSettings(settingsKey(page));
     scroller().scrollTop = 0;
     return mount(page);
   }
@@ -143,13 +149,13 @@ export function initDownloader(ctx) {
       if (page === "update") { await refreshUpdate(); }
       if (page === "failed") { await tasks.loadFailed(); state.job = state.job || await dl("GET", "/api/job"); }
       if (page === "accounts") state.accounts = (await dl("GET", "/api/accounts")).items;
-      if (page === "storage" || page === "options") {
+      if (["storage", "content", "speed", "general"].includes(page)) {
         const r = await dl("GET", "/api/settings");
         state.settings = r.settings; state.form = {};
         state.job = state.job || await dl("GET", "/api/job");
         if (page === "storage") state.link = solo ? null : await api.dlStorageLink();
       }
-      if (page === "link") { state.info = await api.dlInfo(); state.job = state.job || await dl("GET", "/api/job").catch(() => null); }
+      if (page === "link" || page === "home") { state.info = await api.dlInfo(); state.job = state.job || await dl("GET", "/api/job").catch(() => null); }
     } catch (e) {
       if (isOpen() && state.page === page) $("#dl-page").innerHTML = `<div class="dl-empty">${icon("warn")}<b>读取失败</b><span>${esc(e.message)}</span><button class="btn" data-dl="reload">重试</button></div>`;
       return;
@@ -168,7 +174,12 @@ export function initDownloader(ctx) {
     const lb = $("#dl-logbox"), lbTop = lb ? lb.scrollTop : 0, lbStick = !lb || lb.scrollTop + lb.clientHeight >= lb.scrollHeight - 8;
     const active = document.activeElement && box.contains(document.activeElement) ? document.activeElement : null;
     const focusKey = active && (active.dataset.f || active.id), sel = active && active.selectionStart;
-    box.innerHTML = { update: pageUpdate, failed: pageFailed, accounts: pageAccounts, storage: pageStorage, options: pageOptions, link: pageLink }[state.page]();
+    box.innerHTML = { update: pageUpdate, failed: pageFailed, accounts: pageAccounts, storage: pageStorage, content: pageContent, speed: pageSpeed, general: pageGeneral, link: pageLink, home: pageHome }[state.page]();
+    // 页面每秒重画一次，转圈、进度条这些循环动画会跟着从头开始，看上去一顿一顿的。
+    // 让它们都对齐到同一个时钟：重画之后接着刚才的角度继续转。
+    for (const a of box.getAnimations ? box.getAnimations({ subtree: true }) : []) {
+      if (a.effect && a.effect.getTiming().iterations === Infinity) a.startTime = 0;
+    }
     if (keepScroll) sc.scrollTop = top;
     const lb2 = $("#dl-logbox"); if (lb2) lb2.scrollTop = lbStick ? lb2.scrollHeight : lbTop;
     if (focusKey) { const el = box.querySelector(`[data-f="${focusKey}"], #${CSS.escape(focusKey)}`); if (el) { el.focus(); try { el.setSelectionRange(sel, sel); } catch (e) { /* 不是文本框 */ } } }
@@ -183,14 +194,15 @@ export function initDownloader(ctx) {
     const running = job && (job.running || job.status === "running");
     if (running) {
       // 速度：按两次查询之间的增量估算，稍微平滑一下
-      const now = performance.now(), sp = state.speed;
+      // 用“实际收到的字节数”算（边下边涨）；旧的下载模块没有这个数时退回到“已完成文件的大小”
+      const now = performance.now(), sp = state.speed, got = job.transferred ?? job.bytes;
       if (sp.t && now - sp.t > 400) {
         const dt = (now - sp.t) / 1000;
-        const bps = Math.max(0, (job.bytes - sp.bytes) / dt), ips = Math.max(0, (job.done - sp.done) / dt);
+        const bps = Math.max(0, (got - sp.bytes) / dt), ips = Math.max(0, (job.done - sp.done) / dt);
         sp.bps = sp.bps ? sp.bps * 0.6 + bps * 0.4 : bps;
         sp.ips = sp.ips ? sp.ips * 0.7 + ips * 0.3 : ips;
-        sp.t = now; sp.bytes = job.bytes; sp.done = job.done;
-      } else if (!sp.t || job.done < sp.done) { state.speed = { t: now, bytes: job.bytes, done: job.done, bps: 0, ips: 0 }; }
+        sp.t = now; sp.bytes = got; sp.done = job.done;
+      } else if (!sp.t || job.done < sp.done) { state.speed = { t: now, bytes: got, done: job.done, bps: 0, ips: 0 }; }
       startPolling();
     } else {
       state.speed = { t: 0, bytes: 0, done: 0, bps: 0, ips: 0 };
@@ -198,17 +210,23 @@ export function initDownloader(ctx) {
     }
     syncBadge();
   }
+  async function pollOnce() {
+    try {
+      onJob(await dl("GET", "/api/job"));
+      if (state.logsOpen) await fetchLogs();
+      if (!(state.job.running || state.job.status === "running")) { clearInterval(pollTimer); pollTimer = 0; }
+      if (isOpen() && state.page === "update") draw();
+    } catch (e) { clearInterval(pollTimer); pollTimer = 0; }
+  }
   function startPolling() {
     if (pollTimer) return;
-    pollTimer = setInterval(async () => {
-      try {
-        onJob(await dl("GET", "/api/job"));
-        if (state.logsOpen) await fetchLogs();
-        if (!(state.job.running || state.job.status === "running")) { clearInterval(pollTimer); pollTimer = 0; }
-        if (isOpen() && state.page === "update") draw();
-      } catch (e) { clearInterval(pollTimer); pollTimer = 0; }
-    }, 1000);
+    pollTimer = setInterval(pollOnce, 1000);
   }
+  // 窗口最小化、被别的窗口挡住或放进托盘时，浏览器内核会把页面里的定时器放慢（最慢每分钟才跑一次），
+  // 界面上的进度就不动了——下载本身在另一个进程里照常进行。窗口回到眼前时立刻刷新一次，不等下一次定时。
+  const catchUp = () => { if (!document.hidden && pollTimer) pollOnce(); };
+  document.addEventListener("visibilitychange", catchUp);
+  window.addEventListener("focus", catchUp);
   // 详细日志：下载模块自己的运行记录（每个文件的成功 / 失败原因都在里面），按上次取到的位置接着取
   async function fetchLogs() {
     try {
@@ -340,14 +358,14 @@ export function initDownloader(ctx) {
     </div>`;
   }
 
-  // ================= 保存位置 / 下载选项 =================
+  // ================= 保存位置 =================
   const val = (k) => (k in state.form ? state.form[k] : state.settings[k]);
   const dirty = (keys) => keys.some((k) => k in state.form && JSON.stringify(state.form[k]) !== JSON.stringify(state.settings[k]));
   const jobRunning = () => state.job && (state.job.running || state.job.status === "running");
   function field([key, label, type, hint]) {
-    if (type === "bool") return `<div class="set"><div class="t">${label}${hint ? `<small>${hint}</small>` : ""}</div><div class="ctl"><button class="switch ${val(key) ? "on" : ""}" data-dlsw="${key}" role="switch" aria-checked="${!!val(key)}"></button></div></div>`;
+    if (type === "bool") return `<div class="set"><div class="t">${label}${hintHTML(hint)}</div><div class="ctl"><button class="switch ${val(key) ? "on" : ""}" data-dlsw="${key}" role="switch" aria-checked="${!!val(key)}"></button></div></div>`;
     const isPw = type === "password", saved = isPw && state.settings[key + "_SET"];
-    return `<div class="set"><div class="t">${label}${hint ? `<small>${hint}</small>` : ""}</div><div class="ctl">
+    return `<div class="set"><div class="t">${label}${hintHTML(hint)}</div><div class="ctl">
       <input type="${isPw ? "password" : "text"}" data-f="${key}" data-dlin="${key}" value="${esc(isPw ? (state.form[key] || "") : (val(key) ?? ""))}" placeholder="${saved ? "已保存，留空表示不修改" : ""}" autocomplete="off" spellcheck="false">
       ${type === "path" ? `<button class="btn" data-dl="pick-local">选择…</button>` : ""}</div></div>`;
   }
@@ -388,9 +406,6 @@ export function initDownloader(ctx) {
         : b.entries.length ? `<div class="dl-folders">${b.entries.map((n) => `<button data-dlbrowse="${esc(b.share ? b.share : n)}|${esc(b.share ? [...b.path, n].join("/") : "")}">${icon("folder")}${esc(n)}</button>`).join("")}</div>` : `<div class="dl-loading">这里没有子文件夹</div>`}
       <div class="dl-actions">${b.share ? `<button class="btn primary" data-dl="browse-use">保存到这里</button>` : ""}<button class="btn ghost" data-dl="browse-close">关闭</button></div></div>`;
   }
-  const OPTION_KEYS = ["MAIN_ACCOUNT_SYNC_THREADS", "BACKUP_ACCOUNT_SYNC_THREADS", "MAIN_ACCOUNT_DOWNLOAD_THREADS", "BACKUP_ACCOUNT_DOWNLOAD_THREADS", "DELAY_SYNC", "DELAY_DOWNLOAD",
-    "FAILURE_RATE_THRESHOLD", "RATE_LIMIT_ENABLED", "REST_EVERY", "REST_SECONDS", "MAX_RETRIES", "SYNC_TYPES", "SYNC_NOVELS", "METADATA_REFRESH_LIMIT", "UGOIRA_PREFER_HQ", "UGOIRA_WEBP_LOSSLESS",
-    "PROXY_MODE", "PROXY_URL", "REVIEW_THRESHOLD", "KEEP_AWAKE"];
   const PROXY_MODES = [["system", "跟随系统设置"], ["custom", "自定义"], ["none", "不使用代理"]];
   const PROXY_HINTS = {
     system: "使用 Windows 里设置的代理；系统没有设置代理时直接连接。",
@@ -409,15 +424,44 @@ export function initDownloader(ctx) {
           ${!(t.steps || []).length ? `<div class="dl-step bad">${icon("x")}<span>${esc(t.message || "测试没有完成")}</span></div>` : ""}</div>` : ""}
       </div>`;
   }
-  function pageOptions() {
-    const s = state.settings; if (!s) return "";
-    const num = (key, min, max, step = 1) => `<input type="number" data-f="${key}" data-dlnum="${key}" min="${min}" max="${max}" step="${step}" value="${esc(String(val(key)))}">`;
-    const pair = (key) => { const v = val(key) || [0, 0]; return `<input type="number" data-f="${key}0" data-dlpair="${key}:0" min="0" max="60" step="0.1" value="${v[0]}"><span>到</span><input type="number" data-f="${key}1" data-dlpair="${key}:1" min="0" max="60" step="0.1" value="${v[1]}"><span>秒</span>`; };
-    const sw = (key) => `<button class="switch ${val(key) ? "on" : ""}" data-dlsw="${key}" role="switch" aria-checked="${!!val(key)}"></button>`;
-    const row = (t, h, c) => `<div class="set"><div class="t">${t}${h ? `<small>${h}</small>` : ""}</div><div class="ctl">${c}</div></div>`;
+  const CONTENT_KEYS = ["SYNC_TYPES", "SYNC_NOVELS", "METADATA_REFRESH_LIMIT", "UGOIRA_PREFER_HQ", "UGOIRA_WEBP_LOSSLESS", "REVIEW_THRESHOLD"];
+  const SPEED_KEYS = ["PROXY_MODE", "PROXY_URL", "MAIN_ACCOUNT_SYNC_THREADS", "BACKUP_ACCOUNT_SYNC_THREADS", "MAIN_ACCOUNT_DOWNLOAD_THREADS", "BACKUP_ACCOUNT_DOWNLOAD_THREADS",
+    "DELAY_SYNC", "DELAY_DOWNLOAD", "FAILURE_RATE_THRESHOLD", "RATE_LIMIT_ENABLED", "REST_EVERY", "REST_SECONDS", "MAX_RETRIES"];
+  // 这几页共用的小控件
+  const num = (key, min, max, step = 1) => `<input type="number" data-f="${key}" data-dlnum="${key}" min="${min}" max="${max}" step="${step}" value="${esc(String(val(key)))}">`;
+  const pair = (key) => { const v = val(key) || [0, 0]; return `<input type="number" data-f="${key}0" data-dlpair="${key}:0" min="0" max="60" step="0.1" value="${v[0]}"><span>到</span><input type="number" data-f="${key}1" data-dlpair="${key}:1" min="0" max="60" step="0.1" value="${v[1]}"><span>秒</span>`; };
+  const sw = (key) => `<button class="switch ${val(key) ? "on" : ""}" data-dlsw="${key}" role="switch" aria-checked="${!!val(key)}"></button>`;
+  // 点了马上生效的开关（不用再点“保存”）
+  const nowSw = (key) => `<button class="switch ${state.settings[key] ? "on" : ""}" data-dlnow="${key}" role="switch" aria-checked="${!!state.settings[key]}"></button>`;
+  const row = (t, h, c) => `<div class="set"><div class="t">${t}${hintHTML(h)}</div><div class="ctl">${c}</div></div>`;
+  const busyNote = () => (jobRunning() ? `<div class="dl-note lv-warn">${icon("warn")}<div><b>有任务正在运行</b><small>任务结束后才能修改这些选项。</small></div></div>` : "");
+  const saveBar = (keys) => `<div class="dl-actions sticky"><span class="sp"></span>${dirty(keys) ? `<button class="btn ghost" data-dl="revert">放弃修改</button>` : ""}<button class="btn primary" data-dl="save" data-keys="${keys.join(",")}" ${dirty(keys) && !jobRunning() ? "" : "disabled"}>保存</button></div>`;
+
+  // ================= 下载内容：下什么 =================
+  function pageContent() {
+    if (!state.settings) return "";
     const types = val("SYNC_TYPES") || [];
+    return `${busyNote()}
+      <div class="group"><div class="gh">下载哪些内容</div>
+        ${row("作品类型", "动图算在插画里", `<div class="seg multi">${[["illust", "插画"], ["manga", "漫画"]].map(([v, l]) => `<button data-dltype="${v}" class="${types.includes(v) ? "on" : ""}">${l}</button>`).join("")}</div>`)}
+        ${row("小说", "", sw("SYNC_NOVELS"))}
+        ${row("顺带刷新旧作品的数据", "增量检查时，遇到已有作品后再往前刷新多少个（收藏数、标签等）", `${num("METADATA_REFRESH_LIMIT", 0, 1000)}<span>个</span>`)}
+      </div>
+      <div class="group"><div class="gh">动图</div>
+        ${row("下载最高清的版本", "Pixiv 的动图是一个装着每一帧图片的压缩包，有大（最长边 1920）、小（600）两种。打开 = 下载大的，这就是 Pixiv 能给的原始画质；压缩包会原样保存。", sw("UGOIRA_PREFER_HQ"))}
+        ${row("预览动画不再压缩", "除了原始压缩包，还会另外生成一个能直接播放的 WebP 动画。关闭 = 生成时再压缩一次（体积小，画质略降）；打开 = 和原始帧完全一致（体积大很多、生成慢）。原始压缩包不受这一项影响。", sw("UGOIRA_WEBP_LOSSLESS"))}
+      </div>
+      <div class="group"><div class="gh">检查之后</div>
+        ${row("新发现的文件超过多少先问我", "“检查更新并下载”时，如果这次新发现的文件比这个数多，就先停下来列出是谁的，等你确认后再下载。填 0 表示从不询问。", `${num("REVIEW_THRESHOLD", 0, 1000000)}<span>个</span>`)}
+      </div>
+      ${saveBar(CONTENT_KEYS)}`;
+  }
+
+  // ================= 速度与网络：多快、怎么连 =================
+  function pageSpeed() {
+    if (!state.settings) return "";
     const preset = Object.entries(PRESETS).find(([, p]) => Object.entries(p[2]).every(([k, v]) => JSON.stringify(val(k)) === JSON.stringify(v)));
-    return `${jobRunning() ? `<div class="dl-note lv-warn">${icon("warn")}<div><b>有任务正在运行</b><small>任务结束后才能修改这些选项。</small></div></div>` : ""}
+    return `${busyNote()}
       ${proxyGroup(row)}
       <div class="group"><div class="gh">速度与风控</div>
         ${row("预设", "一次设置好下面的线程数和间隔。越快越容易被 Pixiv 限速。", `<div class="seg">${Object.entries(PRESETS).map(([k, p]) => `<button data-dlpreset="${k}" class="${preset && preset[0] === k ? "on" : ""}" title="${esc(p[1])}">${p[0]}</button>`).join("")}</div>`)}
@@ -430,31 +474,59 @@ export function initDownloader(ctx) {
         ${row("失败率超过多少就暂停", "最近 20 次里失败的比例（0.1 – 0.9）", num("FAILURE_RATE_THRESHOLD", 0.1, 0.9, 0.05))}
         ${row("单个文件最多重试", "", `${num("MAX_RETRIES", 1, 10)}<span>次</span>`)}
       </div>
-      <div class="group"><div class="gh">下载哪些内容</div>
-        ${row("作品类型", "动图算在插画里", `<div class="seg multi">${[["illust", "插画"], ["manga", "漫画"]].map(([v, l]) => `<button data-dltype="${v}" class="${types.includes(v) ? "on" : ""}">${l}</button>`).join("")}</div>`)}
-        ${row("小说", "", sw("SYNC_NOVELS"))}
-        ${row("顺带刷新旧作品的数据", "增量检查时，遇到已有作品后再往前刷新多少个（收藏数、标签等）", `${num("METADATA_REFRESH_LIMIT", 0, 1000)}<span>个</span>`)}
-      </div>
+      ${saveBar(SPEED_KEYS)}`;
+  }
+
+  // ================= 常规：和下载内容无关的程序行为（这一页的改动都是马上生效） =================
+  function pageGeneral() {
+    if (!state.settings) return "";
+    return `${solo && ctx.setSetting ? `<div class="group"><div class="gh">窗口</div>
+      <div class="set"><div class="t">关闭窗口时${hintHTML("放到托盘后程序继续在后台运行，下载不会中断；点托盘里的图标回来，右键可以退出。")}</div>
+        <div class="ctl"><div class="seg">${[["ask", "每次询问"], ["tray", "放到托盘"], ["exit", "直接退出"]].map(([v, l]) => `<button data-dlclose-pref="${v}" class="${(ctx.S.closeAction || "ask") === v ? "on" : ""}">${l}</button>`).join("")}</div></div></div></div>` : ""}
       ${ctx.setSetting && api.jobWatch ? `<div class="group"><div class="gh">任务结束后</div>
-        <div class="set"><div class="t">弹出系统通知<small>检查或下载结束时在屏幕右下角提醒，窗口放在托盘里也能看到。</small></div>
+        <div class="set"><div class="t">弹出系统通知${hintHTML("检查或下载结束时在屏幕右下角提醒，窗口放在托盘里也能看到。")}</div>
           <div class="ctl"><button class="switch ${ctx.S.notifyOnFinish !== false ? "on" : ""}" data-uisw="notifyOnFinish" role="switch" aria-checked="${ctx.S.notifyOnFinish !== false}"></button></div></div>
-        <div class="set"><div class="t">“完成后运行命令”要运行的命令<small>开始任务时可以选“完成后运行命令”。这里填要运行的程序或脚本，例如 <span class="mono">D:\\scripts\\after.bat</span>。留空则不能选这一项。</small></div>
+        <div class="set"><div class="t">完成后运行的命令${hintHTML(`开始任务时可以选“完成后运行命令”。这里填要运行的程序或脚本，例如 <span class="mono">D:\\scripts\\after.bat</span>。留空则不能选这一项。`)}</div>
           <div class="ctl"><input type="text" data-f="afterCommand" data-uiin="afterCommand" value="${esc(ctx.S.afterCommand || "")}" placeholder="程序或脚本的完整路径" autocomplete="off" spellcheck="false"></div></div>
       </div>` : ""}
       <div class="group"><div class="gh">电脑睡眠</div>
-        ${row("任务进行时不让电脑自动睡眠", "锁屏、关屏幕都不影响下载；会让下载停下来的是电脑空闲一段时间后自动睡眠。打开后，有任务在运行时电脑不会自己睡，任务结束或暂停后恢复正常。挡不住合上笔记本盖子和手动睡眠。", sw("KEEP_AWAKE"))}
-      </div>
-      <div class="group"><div class="gh">检查之后</div>
-        ${row("新发现的文件超过多少先问我", "“检查更新并下载”时，如果这次新发现的文件比这个数多，就先停下来列出是谁的，等你确认后再下载。填 0 表示从不询问。", `${num("REVIEW_THRESHOLD", 0, 1000000)}<span>个</span>`)}
-      </div>
-      <div class="group"><div class="gh">动图</div>
-        ${row("下载最高清的版本", "Pixiv 的动图是一个装着每一帧图片的压缩包，有大（最长边 1920）、小（600）两种。打开 = 下载大的，这就是 Pixiv 能给的原始画质；压缩包会原样保存。", sw("UGOIRA_PREFER_HQ"))}
-        ${row("预览动画不再压缩", "除了原始压缩包，还会另外生成一个能直接播放的 WebP 动画。关闭 = 生成时再压缩一次（体积小，画质略降）；打开 = 和原始帧完全一致（体积大很多、生成慢）。原始压缩包不受这一项影响。", sw("UGOIRA_WEBP_LOSSLESS"))}
-      </div>
-      <div class="dl-actions sticky"><span class="sp"></span>${dirty(OPTION_KEYS) ? `<button class="btn ghost" data-dl="revert">放弃修改</button>` : ""}<button class="btn primary" data-dl="save" data-keys="${OPTION_KEYS.join(",")}" ${dirty(OPTION_KEYS) && !jobRunning() ? "" : "disabled"}>保存</button></div>`;
+        ${row("任务进行时不让电脑自动睡眠", "锁屏、关屏幕都不影响下载；会让下载停下来的是电脑空闲一段时间后自动睡眠。打开后，有任务在运行时电脑不会自己睡，任务结束或暂停后恢复正常。挡不住合上笔记本盖子和手动睡眠。", nowSw("KEEP_AWAKE"))}
+      </div>`;
   }
 
-  // ================= 数据与导入 =================
+  // ================= 数据文件夹 / 数据导入 =================
+  // 画师头像：不导入也能补。“检查”只看头像文件夹里实际有没有文件（不访问 Pixiv），“补全”把缺的下回来
+  function avatarTools(ready) {
+    const c = state.avatars;
+    return `<span class="tools">${hintHTML("“检查”看头像文件夹里是不是真的有每位画师的头像、还缺谁的，不访问 Pixiv。“补全”把缺的从 Pixiv 下回来：有地址的直接下，地址失效的由所有账号分着去问。平时检查更新时也会顺带把缺的和换过的头像下回来。")}
+      <button class="btn" data-dl="check-avatars" ${ready && !(c && c.pending) && !jobRunning() ? "" : "disabled"}>${c && c.pending ? "正在检查…" : "检查"}</button>
+      <button class="btn" data-dl="fill-avatars" ${ready && !jobRunning() && !(c && c.missing === 0) ? "" : "disabled"}>补全…</button></span>`;
+  }
+  function avatarResult() {
+    const c = state.avatars;
+    if (!c || c.pending) return "";
+    if (c.error) return `<small class="res bad">${esc(c.error)}</small>`;
+    if (!c.missing) return `<small class="res ok">${fmtNum(c.artists)} 位画师都有头像。</small>`;
+    const names = c.items.slice(0, 6).map((x) => esc(x.name)).join("、");
+    return `<small class="res warn">${fmtNum(c.artists)} 位画师里有 <b>${fmtNum(c.missing)}</b> 位缺头像：${names}${c.missing > 6 ? " 等" : ""}。点“补全”下载。</small>`;
+  }
+
+  // 数据文件夹：数据库、设置、头像都放在哪里
+  function homeGroup() {
+    const i = state.info || {}, files = i.files || {}, kinds = i.kinds || {};
+    const have = (k) => files[k] && files[k].exists;
+    const fileRow = (k) => !files[k] ? "" : `<div class="dl-file"><span class="nm">${esc(kinds[k]?.label || k)}</span>
+        <span class="mono">${esc(files[k].path)}</span><span class="dl-tag ${have(k) ? "ok" : ""}">${have(k) ? esc(files[k].detail || "已有") : "还没有"}</span></div>`;
+    return `<div class="group">
+      <div class="set"><div class="t">数据文件夹<small class="mono">${esc(i.home || "")}</small><small>作品数据库、账号与下载设置、画师头像都在这个文件夹里。</small></div>
+        <div class="ctl">${solo ? `<button class="btn" data-dl="open-home">打开文件夹</button>` : `<button class="btn" data-dl="set-home">更换…</button>`}</div></div>
+      <div class="dl-files">${["works_db", "dl_settings", "avatars"].map(fileRow).join("")}</div>
+      ${i.external ? `<div class="set"><div class="t">搬进查看器<small>现在用的是以前单独使用下载器时留下的数据文件夹。可以把里面的数据库、设置、头像复制到查看器自己的数据目录（<span class="mono">${esc(i.builtinHome || "")}</span>），之后只用这一份。原来的文件不会动。</small></div>
+        <div class="ctl"><button class="btn" data-dl="migrate" ${state.busy === "migrate" ? "disabled" : ""}>${state.busy === "migrate" ? "正在复制…" : "复制过来"}</button></div></div>` : ""}
+    </div>`;
+  }
+  const pageHome = () => homeGroup();
+
   function pageLink() {
     const i = state.info || {}, files = i.files || {}, kinds = i.kinds || {};
     const imp = state.imp;
@@ -462,16 +534,10 @@ export function initDownloader(ctx) {
     const fileRow = (k) => !files[k] ? "" : `<div class="dl-file"><span class="nm">${esc(kinds[k]?.label || k)}</span>
         <span class="mono">${esc(files[k].path)}</span><span class="dl-tag ${have(k) ? "ok" : ""}">${have(k) ? esc(files[k].detail || "已有") : "还没有"}</span></div>`;
     const ready = imp.items.filter((x) => x.ok);
-    return `<div class="group">
-      <div class="set"><div class="t">数据文件夹<small class="mono">${esc(i.home || "")}</small><small>作品数据库、账号与下载设置、画师头像都在这个文件夹里。</small></div>
-        <div class="ctl">${solo ? `<button class="btn" data-dl="open-home">打开文件夹</button>` : `<button class="btn" data-dl="set-home">更换…</button>`}</div></div>
-      <div class="dl-files">${["works_db", "dl_settings", "avatars"].map(fileRow).join("")}</div>
-      ${i.external ? `<div class="set"><div class="t">搬进查看器<small>现在用的是以前单独使用下载器时留下的数据文件夹。可以把里面的数据库、设置、头像复制到查看器自己的数据目录（<span class="mono">${esc(i.builtinHome || "")}</span>），之后只用这一份。原来的文件不会动。</small></div>
-        <div class="ctl"><button class="btn" data-dl="migrate" ${state.busy === "migrate" ? "disabled" : ""}>${state.busy === "migrate" ? "正在复制…" : "复制过来"}</button></div></div>` : ""}
-    </div>
+    return `${solo ? homeGroup() : ""}
     <div class="group"><div class="gh">导入已有的数据</div>
-      <div class="dl-about"><p>把以前的数据导进来。<b>不用管文件名</b>：选好之后会按文件内容认出它是哪一种，改过名的文件也认得。也可以直接选原来的整个数据文件夹，里面认得的会一起找出来。</p></div>
-      <div class="dl-kinds">${Object.entries(kinds).map(([k, v]) => `<div><span class="dl-tag ${v.need === "核心" ? "done" : ""}">${v.need}</span><b>${esc(v.label)}</b><span class="was">原名 ${esc(v.was)}</span><small>${esc(v.what)}</small></div>`).join("")}</div>
+      <div class="dl-about"><p>把以前的数据导进来。<b>不用管文件名</b>：选好之后会按文件内容认出它是哪一种，改过名的文件也认得。也可以直接选原来的整个数据文件夹，里面认得的会一起找出来。${hintHTML(i.viewerKinds ? "评分、自定义标签、收藏、最近查看只保存在本机，Pixiv 上没有，不导入就无法补回。账号与下载设置不导入的话，重新登录、重新设置即可；头像可以用下面的“补全”下载。" : "账号与下载设置不导入的话，重新登录、重新设置即可；头像可以用下面的“补全”下载。")}</p></div>
+      <div class="dl-kinds">${Object.entries(kinds).map(([k, v]) => `<div><span class="dl-tag ${v.need === "核心" ? "done" : ""}">${v.need}</span><b>${esc(v.label)}</b><span class="was">原名 ${esc(v.was)}</span>${k === "avatars" ? avatarTools(have("works_db")) : ""}<small>${esc(v.what)}</small>${k === "avatars" ? avatarResult() : ""}</div>`).join("")}</div>
       <div class="dl-actions"><button class="btn" data-dl="imp-files">选择文件…</button><button class="btn" data-dl="imp-folder">选择文件夹…</button>
         ${imp.items.length ? `<span class="sp"></span><button class="btn ghost" data-dl="imp-clear">清空</button>` : ""}</div>
       ${imp.items.length ? `<div class="dl-picked">${imp.items.map((x) => `<div class="${x.ok ? "ok" : "bad"}">${icon(x.ok ? "check" : "x")}
@@ -482,16 +548,6 @@ export function initDownloader(ctx) {
       ${imp.results ? `<div class="dl-picked">${imp.results.map((r) => `<div class="${r.ok ? "ok" : "bad"}">${icon(r.ok ? "check" : "x")}<div><b>${esc(r.label)}</b>
           <small>${esc(r.message || (r.ok ? "已导入" : "没有成功"))}${r.kept ? `<br>原来的那份保留在：<span class="mono">${esc(r.kept)}</span>` : ""}</small></div></div>`).join("")}</div>` : ""}
     </div>
-    <div class="group"><div class="gh">之后再补</div>
-      <div class="set"><div class="t">画师头像${files.avatars && files.avatars.detail ? ` · 现有 ${esc(files.avatars.detail)}` : ""}<small>“补全”只下载头像文件夹里还没有的；“全部重新下载”把所有画师的头像都换成最新的。平时检查更新时也会顺带把缺的和换过的头像下回来。</small></div>
-        <div class="ctl"><button class="btn" data-dl="fill-avatars" ${have("works_db") ? "" : "disabled"}>补全缺少的…</button>
-          <button class="btn ghost" data-dl="fill-avatars" data-all="1" ${have("works_db") ? "" : "disabled"}>全部重新下载…</button></div></div>
-      ${i.viewerKinds ? `<div class="set"><div class="t"><small>评分、自定义标签、收藏、最近查看只保存在本机，Pixiv 上没有，不导入就无法补回。账号与下载设置不导入的话，重新登录、重新设置即可。</small></div></div>`
-        : `<div class="set"><div class="t"><small>账号与下载设置不导入的话，重新登录、重新设置即可。</small></div></div>`}
-    </div>
-    ${solo && ctx.setSetting ? `<div class="group"><div class="gh">窗口</div>
-      <div class="set"><div class="t">关闭窗口时<small>放到托盘后程序继续在后台运行，下载不会中断；点托盘里的图标回来，右键可以退出。</small></div>
-        <div class="ctl"><div class="seg">${[["ask", "每次询问"], ["tray", "放到托盘"], ["exit", "直接退出"]].map(([v, l]) => `<button data-dlclose-pref="${v}" class="${(ctx.S.closeAction || "ask") === v ? "on" : ""}">${l}</button>`).join("")}</div></div></div></div>` : ""}
     <div class="group"><div class="gh">说明</div><div class="dl-about">
       ${solo ? `<p>想换电脑或备份，把数据文件夹整个拷走即可；想恢复成全新状态，关闭程序后删掉它。里面的 settings.json 含有登录凭证，不要发给别人。</p>`
         : `<p>下载在后台以独立的进程运行，下载再忙也不影响看图，也不占用网络端口；关闭查看器时会处理完当前文件再退出。</p>`}
@@ -507,6 +563,12 @@ export function initDownloader(ctx) {
     if (t.closest("[data-dlclose]")) return ctx.closeDialog();
     const nav = t.closest("[data-dlpage], [data-dlgo]");
     if (nav) return go(nav.dataset.dlpage || nav.dataset.dlgo);
+    const now = t.closest("[data-dlnow]");
+    if (now) {
+      const k = now.dataset.dlnow, v = !state.settings[k];
+      if (await guard(() => dl("POST", "/api/settings", { [k]: v }))) state.settings[k] = v;
+      return draw();
+    }
     const sw = t.closest("[data-dlsw]");
     if (sw) { state.form[sw.dataset.dlsw] = !val(sw.dataset.dlsw); return draw(); }
     const md = t.closest("[data-dlmode]");
@@ -647,10 +709,15 @@ export function initDownloader(ctx) {
       if (!solo) { await ctx.reloadLibrary(); ctx.loadWorks(); }
       return draw();
     }
+    if (act === "check-avatars") {
+      state.avatars = { pending: true }; draw();
+      try { state.avatars = await dl("POST", "/api/avatars/check"); } catch (e) { state.avatars = { error: e.message }; }
+      if (!solo && state.avatars.fixed) await ctx.reloadLibrary();
+      return draw();
+    }
     if (act === "fill-avatars") {
-      const all = b.dataset.all === "1";
-      const c = all ? { kind: "download_avatars", simple: true, params: { all: true }, title: "重新下载全部头像", text: "把所有画师的头像重新下载一遍（画师换过头像时用）。会访问 Pixiv，画师多的时候要花一些时间，可以随时暂停或停止。" }
-        : { kind: "download_avatars", simple: true, title: "补全头像", text: "下载头像文件夹里还没有的画师头像。会访问 Pixiv，可以随时暂停或停止；没成功的再点一次就会接着补。" };
+      const c = { kind: "download_avatars", simple: true, title: "补全头像", text: "下载头像文件夹里还没有的画师头像。会访问 Pixiv，可以随时暂停或停止；没成功的再点一次就会接着补。" };
+      state.avatars = null;
       if (solo) { mount("update"); state.confirm = c; return; }
       return void ctx.openDownloader("update").then(() => { state.confirm = c; draw(); });
     }

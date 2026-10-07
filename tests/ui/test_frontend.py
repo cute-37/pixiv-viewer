@@ -293,11 +293,17 @@ def test_update_download_can_be_cancelled(page):
     page.wait_for_selector("#upd-box [data-upd=start]")
 
 
-# ---------------- 下载代理（设置 → 下载选项） ----------------
+# ---------------- 下载代理（设置 → 速度与网络） ----------------
 def open_download_options(page):
     page.click("#btn-settings")
-    page.click(".dnav [data-page=dl-options]")
+    page.click(".dnav [data-page=dl-speed]")
     page.wait_for_selector("[data-dlproxysel]")
+
+
+def open_general(page):
+    page.click("#btn-settings")
+    page.click(".dnav [data-page=general]")
+    page.wait_for_selector("[data-dlnow=KEEP_AWAKE]")
 
 
 def test_proxy_setting_custom_address_test_and_save(page):
@@ -368,7 +374,7 @@ def test_clear_thumbnail_cache_from_settings(page):
     page.click("#btn-settings")
     page.click(".dnav [data-page=library]")
     row = page.locator(".set", has=page.locator("[data-act=clear-cache]"))
-    assert "缩略图缓存" in row.inner_text() and "214" in row.inner_text() and "90 天" in row.inner_text()
+    assert "缩略图缓存" in row.inner_text() and "214" in row.inner_text() and "90 天" in row.locator(".help-text").text_content()      # 细节在小问号里
     page.click("[data-act=clear-cache]")
     page.wait_for_function("document.querySelector('[data-act=clear-cache]') && document.querySelector('[data-act=clear-cache]').disabled")
     assert "已清空缩略图缓存" in page.locator("#toast-t").inner_text()
@@ -518,7 +524,7 @@ def test_close_choice_is_remembered_and_editable_in_settings(desktop_page):
     pg.wait_for_function("window.__pvLastWindowAction === 'tray'")
     assert pg.locator(".closeask").count() == 0
     pg.click("#btn-settings")
-    pg.click(".dnav [data-page=library]")
+    pg.click(".dnav [data-page=general]")
     seg = pg.locator("[data-set=closeAction]")
     assert "on" in seg.locator("[data-v=tray]").get_attribute("class")
     seg.locator("[data-v=ask]").click()                           # 在设置里改回“每次询问”
@@ -627,14 +633,18 @@ def test_side_button_can_be_rebound(page):
     page.wait_for_function("t => document.querySelector('#v-idx').innerText !== t", arg=idx)
 
 
-def test_keep_awake_switch_in_download_options(page):
-    open_download_options(page)
-    switch = page.locator("[data-dlsw=KEEP_AWAKE]")
+def test_keep_awake_switch_in_general_settings(page):
+    open_general(page)
+    switch = page.locator("[data-dlnow=KEEP_AWAKE]")
     assert switch.get_attribute("aria-checked") == "true"                # 默认打开
-    assert "睡眠" in page.locator("#dl-page").inner_text()
-    switch.click()
-    assert page.locator("[data-dlsw=KEEP_AWAKE]").get_attribute("aria-checked") == "false"
-    assert page.locator("[data-dl=save]").is_enabled()
+    assert "睡眠" in page.locator("#dpage").inner_text()
+    switch.click()                                                       # 这一页的开关马上生效，没有“保存”按钮
+    page.wait_for_function("document.querySelector('[data-dlnow=KEEP_AWAKE]').getAttribute('aria-checked') === 'false'")
+    assert page.locator("#dpage [data-dl=save]").count() == 0
+    page.click(".dnav [data-page=dl-speed]")
+    page.wait_for_selector("[data-dlproxysel]")
+    page.click(".dnav [data-page=general]")                              # 换页再回来：确实存下了
+    page.wait_for_selector("[data-dlnow=KEEP_AWAKE][aria-checked=false]")
 
 
 # ---------------- 下载完成后做什么 ----------------
@@ -659,8 +669,8 @@ def test_after_job_action_countdown_and_cancel(page):
     assert page.locator(".dl-confirm [data-after]").input_value() == "none"                 # 不会记成默认：下一次又是“什么都不做”
 
 
-def test_after_job_settings_in_download_options(page):
-    open_download_options(page)
+def test_after_job_settings_in_general_settings(page):
+    open_general(page)
     switch = page.locator("[data-uisw=notifyOnFinish]")
     assert switch.get_attribute("aria-checked") == "true"
     switch.click()
@@ -700,3 +710,145 @@ def test_light_dark_switch_cross_fades_for_half_a_second(page):
     page.evaluate("window.__vt = 0; const o = document.startViewTransition.bind(document); document.startViewTransition = (f) => { window.__vt++; return o(f); }; 0")
     page.evaluate("document.querySelector('#sort button:not(.on)').click()")
     assert page.evaluate("window.__vt") == 0
+
+
+def test_artist_page_header_can_join_folder_and_pin(page):
+    """画师页标题栏：加入文件夹、置顶，不用回侧栏里找这位画师；侧栏会自动滚到他"""
+    key = page.evaluate("""() => {
+        const rows = [...document.querySelectorAll('#artists .row-btn[data-artist]:not(.sub)')];
+        const row = rows[rows.length - 1];                      // 侧栏最底下的一位：一开始看不到
+        window.__last = row.dataset.artist;
+        return row.dataset.artist;
+    }""")
+    page.fill("#artist-filter", "")
+    page.evaluate("k => document.querySelector(`#artists .row-btn[data-artist=\"${CSS.escape(k)}\"]`).scrollIntoView()", key)
+    page.locator(f'#artists .row-btn[data-artist="{key}"]:not(.sub)').first.click()
+    page.locator('#title-area [data-act="folders"]').wait_for()
+    page.evaluate("document.querySelector('#artists').scrollTop = 0")
+    # 加入文件夹
+    btn = page.locator('#title-area [data-act="folders"]')
+    assert "加入文件夹" in btn.inner_text()
+    btn.click()
+    page.locator("#menu button", has_text="风景").click()
+    page.wait_for_function("document.querySelector('#title-area [data-act=folders]').innerText.includes('风景')")
+    assert "on" in page.locator('#title-area [data-act="folders"]').get_attribute("class")
+    # 置顶
+    pin = page.locator('#title-area [data-act="pin"]')
+    assert pin.inner_text().strip() == "置顶"
+    pin.click()
+    page.wait_for_function("document.querySelector('#title-area [data-act=pin]').innerText.trim() === '已置顶'")
+    # 重新打开这位画师的页面：侧栏滚到能看见他
+    page.click('#nav [data-nav="all"]')
+    page.evaluate("document.querySelector('#artists').scrollTop = 1e6")
+    page.evaluate("document.dispatchEvent(new MouseEvent('mouseup', {button: 3, bubbles: true}))")     # 鼠标侧键“后退”
+    page.wait_for_function("!!document.querySelector('#artists .row-btn.on')")
+    visible = page.evaluate("""() => { const b = document.querySelector('#artists'), r = document.querySelector('#artists .row-btn.on').getBoundingClientRect(), o = b.getBoundingClientRect();
+        return r.top >= o.top - 1 && r.bottom <= o.bottom + 1; }""")
+    assert visible
+
+
+def test_artist_header_name_opens_pixiv_and_actions_sit_on_the_right(page):
+    """画师页标题栏：点头像 / 名字去 Pixiv 主页（不再有单独的“主页”按钮）；操作按钮靠右，紧挨搜索框"""
+    page.evaluate("window.__opened = []; window.open = (u) => { window.__opened.push(u); return null; }; 0")
+    page.locator('#artists .row-btn[data-artist]').nth(2).click()
+    page.locator('#title-area [data-act="sync"]').wait_for()
+    assert page.locator('#title-area button[data-act="pixiv"]').count() == 0
+    assert "检查新作" in page.locator('#title-area [data-act="sync"]').inner_text()
+    gap = page.evaluate("""() => { const a = document.querySelector('#title-area .acts').getBoundingClientRect(), s = document.querySelector('#search').getBoundingClientRect();
+        return s.left - a.right; }""")
+    assert 0 <= gap <= 24
+    urls = page.evaluate("""async () => {
+        const seen = []; const api = (await import('./js/state.js')).ctx.api; const real = api.openUrl;
+        api.openUrl = (u) => { seen.push(u); };
+        document.querySelector('#title-area h1').click();
+        document.querySelector('#title-area .big-avatar').click();
+        api.openUrl = real; return seen; }""")
+    assert len(urls) == 2 and all(u.startswith("https://www.pixiv.net/users/") for u in urls)
+
+
+def test_long_setting_descriptions_hide_behind_a_help_mark(page):
+    """设置页：长说明收进小问号，鼠标移上去才显示；短说明照常直接显示"""
+    page.keyboard.press("Control+,")
+    page.locator('.dnav [data-page="library"]').click()
+    row = page.locator(".set", has_text="显示 R18 内容")
+    assert row.locator("small").count() == 0
+    mark = row.locator(".help")
+    assert page.locator("#helptip:visible").count() == 0
+    mark.hover()
+    tip = page.locator("#helptip")
+    tip.wait_for()
+    assert "R18 作品不会出现在任何地方" in tip.inner_text()
+    box, view = tip.bounding_box(), page.viewport_size
+    assert box["x"] >= 0 and box["x"] + box["width"] <= view["width"] and box["y"] + box["height"] <= view["height"]
+    page.mouse.move(5, 5)
+    page.wait_for_function("document.querySelector('#helptip').hidden")
+    page.locator('.dnav [data-page="dl-speed"]').click()
+    short = page.locator(".set", has_text="检查更新的线程数")
+    short.wait_for()
+    assert "主账号 / 每个备用账号" in short.locator("small").inner_text()
+
+
+def test_avatar_check_and_fill_live_next_to_the_avatar_item(page):
+    """数据与导入：头像的“检查 / 补全”就在“画师头像”那一行；检查不访问 Pixiv，直接说出缺谁的"""
+    page.keyboard.press("Control+,")
+    page.locator('.dnav [data-page="dl-link"]').click()
+    item = page.locator(".dl-kinds > div", has_text="画师头像")
+    item.wait_for()
+    assert page.get_by_text("之后再补").count() == 0 and page.get_by_text("全部重新下载").count() == 0
+    item.get_by_role("button", name="检查").click()
+    res = item.locator("small.res")
+    res.wait_for()
+    assert "2 位缺头像" in res.inner_text().replace("\xa0", " ").replace("  ", " ") or "2" in res.inner_text()
+    item.get_by_role("button", name="补全…").click()
+    page.get_by_text("补全头像").first.wait_for()
+
+
+def test_running_spinner_keeps_turning_across_redraws(page):
+    """任务进行时页面每秒重画一次：转圈动画要接着刚才的角度转，不能每次从头开始（看上去一顿一顿）"""
+    open_dl(page)
+    page.click("[data-dl=ask][data-kind=sync_download]")
+    page.click("[data-dl=start]")
+    page.wait_for_selector(".dl-run-card .dl-spin")
+    page.evaluate("document.querySelector('.dl-spin').__mark = 1; 0")
+
+    def angle_error():
+        # 转一圈 800 毫秒、对齐到页面时钟：任何时刻的角度都应当等于 时间 % 800 对应的角度
+        return page.evaluate("""() => { const a = document.querySelector('.dl-spin').getAnimations()[0];
+            return [a.startTime, Math.abs((a.currentTime % 800) - (document.timeline.currentTime % 800))]; }""")
+    start, off = angle_error()
+    assert start == 0 and off < 0.01
+    page.wait_for_function("!document.querySelector('.dl-spin').__mark")          # 已经重画过，是个新的元素
+    start, off = angle_error()
+    assert start == 0 and off < 0.01
+
+
+def test_settings_are_grouped_by_what_they_are_about(page):
+    """设置的分类：界面 / 图库 / 下载 / 通用；每一项只出现在说得通的那一页"""
+    page.click("#btn-settings")
+    nav = page.locator(".dnav").inner_text().split()
+    assert nav == ["设置", "界面", "外观", "网格", "看图", "图库", "图库", "数据导入", "下载", "Pixiv", "账号", "保存位置", "下载内容", "速度与网络",
+                   "通用", "常规", "快捷键", "关于"]
+
+    def texts(key, wait):
+        page.click(f".dnav [data-page={key}]")
+        page.wait_for_selector(wait)
+        return page.locator("#dpage").inner_text()
+
+    lib = texts("library", "#dpage .dl-file")                           # 图库：图片在哪、数据在哪、显示什么、缓存
+    assert all(x in lib for x in ("图片文件夹", "数据文件夹", "显示 R18 内容", "缩略图缓存")) and "关闭窗口时" not in lib
+    assert lib.index("图片文件夹") < lib.index("数据文件夹") < lib.index("显示 R18 内容")
+    imp = texts("dl-link", ".dl-kinds")
+    assert "导入已有的数据" in imp and "画师头像" in imp and "数据文件夹\n" not in imp
+    content = texts("dl-content", "[data-dltype]")                      # 下什么
+    assert all(x in content for x in ("作品类型", "小说", "动图", "先问我")) and "线程数" not in content and "代理" not in content
+    speed = texts("dl-speed", "[data-dlproxysel]")                      # 多快、怎么连
+    assert all(x in speed for x in ("网络代理", "预设", "线程数", "周期性休息")) and "作品类型" not in speed and "睡眠" not in speed
+    gen = texts("general", "[data-dlnow=KEEP_AWAKE]")                   # 程序本身的行为
+    assert all(x in gen for x in ("打开上次浏览的位置", "弹出系统通知", "完成后运行的命令", "不让电脑自动睡眠"))
+    # 改“下载内容”只保存这一页的项目
+    page.click(".dnav [data-page=dl-content]")
+    page.wait_for_selector("[data-dltype]")
+    page.click("[data-dltype=manga]")
+    assert set(page.locator("[data-dl=save]").get_attribute("data-keys").split(",")) >= {"SYNC_TYPES", "REVIEW_THRESHOLD"}
+    assert "PROXY_MODE" not in page.locator("[data-dl=save]").get_attribute("data-keys")
+    assert page.locator("[data-dl=save]").is_enabled()

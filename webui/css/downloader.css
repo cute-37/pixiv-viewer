@@ -135,6 +135,11 @@
 .dl-kinds { display: grid; gap: 8px; padding: 2px calc(var(--gap) * 1.5) var(--gap); }
 .dl-kinds > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 .dl-kinds b { font-weight: 600; }
+.dl-kinds .tools { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.dl-kinds .tools .help { margin: 0 2px 0 0; }
+.dl-kinds small.res.ok { color: var(--accent); }
+.dl-kinds small.res.warn b { color: var(--text); }
+.dl-kinds small.res.bad { color: #d9534f; }
 .dl-kinds .was, .dl-picked .was { color: var(--text-3); font-size: calc(var(--fs) - 1.5px); }
 .dl-kinds small { flex-basis: 100%; color: var(--text-3); font-size: calc(var(--fs) - 1.5px); line-height: 1.45; padding-left: 42px; }
 .dl-picked { display: grid; gap: 2px; margin: 0 calc(var(--gap) * 1.5) var(--gap); padding: 6px 0; border-top: 1px solid var(--line); }

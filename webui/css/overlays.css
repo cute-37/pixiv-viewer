@@ -38,12 +38,17 @@
 .dhead { display: flex; align-items: center; padding: calc(var(--gap) * 1.75) calc(var(--gap) * 2.5) var(--gap); }
 .dhead h3 { margin: 0; font: 700 calc(var(--fs) + 5px) var(--font-head); flex: 1; }
 .dpage { overflow: auto; overscroll-behavior: contain; min-height: 0; padding: 0 calc(var(--gap) * 2.5) calc(var(--gap) * 2); display: flex; flex-direction: column; gap: calc(var(--gap) * 1.75); min-width: 0; }
+.dpage > .own { display: contents; }
 .group { border: 1px solid var(--line); border-radius: calc(var(--radius) + 2px); background: var(--surface); }
 .group .gh { padding: var(--gap) calc(var(--gap) * 1.5) 0; color: var(--text-3); font-size: calc(var(--fs) - 2px); font-weight: 600; letter-spacing: 0.04em; }
 .set { display: flex; align-items: center; gap: calc(var(--gap) * 2); padding: var(--gap) calc(var(--gap) * 1.5); min-height: calc(var(--ctl) + var(--gap) * 1.5); }
 .set + .set { border-top: 1px solid var(--line); }
 .set .t { flex: 1; min-width: 0; }
 .set .t small { display: block; color: var(--text-3); font-size: calc(var(--fs) - 1.5px); line-height: 1.45; }
+/* 说明太长时收进标题旁的小问号（help.js） */
+.help { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 6px; border-radius: 50%; border: 1px solid var(--line); color: var(--text-3); font-size: 10px; font-weight: 700; line-height: 1; cursor: help; user-select: none; vertical-align: 1px; }
+.help:hover, .help:focus-visible { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); outline: none; }
+#helptip { position: fixed; z-index: 60; max-width: min(340px, calc(100vw - 16px)); padding: 8px 11px; border-radius: calc(var(--radius) + 1px); background: var(--surface); border: 1px solid var(--line); box-shadow: 0 14px 36px -14px rgb(var(--shadow-rgb) / 0.5); color: var(--text-2); font-size: calc(var(--fs) - 1px); line-height: 1.55; pointer-events: none; }
 .set .ctl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; max-width: 62%; }
 .set select, .set input[type=text], .set input[type=number] { height: calc(var(--ctl) - 2px); border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); color: var(--text); padding: 0 8px; min-width: 0; }
 .set input[type=text] { width: 240px; max-width: 100%; }

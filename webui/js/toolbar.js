@@ -3,7 +3,7 @@ import { $, $$, esc, highlight, icon, fmtDate, fmtNum, debounce, clamp } from ".
 import { app, ctx, view } from "./state.js";
 import { loadWorks, sysAction } from "./grid.js";
 import { syncChrome } from "./prefs.js";
-import { avatarHTML, deleteFolder, folderById, openScope, renameFolder, renderSide } from "./sidebar.js";
+import { artistFolderMenu, avatarHTML, deleteFolder, folderById, openScope, renameFolder, renderSide } from "./sidebar.js";
 
 // ================= 标题栏 =================
 export function renderTitle() {
@@ -14,14 +14,17 @@ export function renderTitle() {
     const a = ctx.artistByKey(view.artist);
     if (!a) return;
     const last = view.works.reduce((m, w) => Math.max(m, w.posted || 0), 0);
-    area.innerHTML = `${avatarHTML(a, "big-avatar")}
-      <div class="t"><div class="row"><h1>${esc(a.name)}</h1></div>
+    const inFolders = (ctx.lib.folders || []).filter((fd) => fd.artists.includes(a.key)).map((fd) => fd.name);
+    // 头像和名字就是去 Pixiv 主页的入口，不另占一个按钮
+    const home = a.id ? `data-act="pixiv" role="link" tabindex="0" title="在 Pixiv 打开 ${esc(a.name)} 的主页"` : "";
+    area.innerHTML = `${avatarHTML(a, "big-avatar").replace("<span ", `<span ${home} `)}
+      <div class="t"><div class="row"><h1 ${home}>${esc(a.name)}${a.id ? icon("ext", "go") : ""}</h1></div>
       <span class="meta">ID ${a.id} · ${fmtNum(n)} 个作品 · ${fmtNum(imgs)} 张${last ? " · 最近 " + fmtDate(last) : ""}</span></div>
       <div class="acts">
-        ${a.id && ctx.api.dl ? `<button class="btn ghost" data-act="sync" title="检查这位画师有没有新作品并下载（会先让你确认）">${icon("sync")}更新</button>` : ""}
-        <button class="btn ghost" data-act="pixiv" title="在 Pixiv 打开画师主页">${icon("ext")}主页</button>
-        <button class="btn ghost" data-act="folder" title="打开文件夹">${icon("folder")}</button>
-        <button class="btn ghost ${a.pinned ? "on" : ""}" data-act="pin" title="${a.pinned ? "取消置顶" : "置顶到侧栏"}">${icon("pin")}</button>
+        ${a.id && ctx.api.dl ? `<button class="btn ghost" data-act="sync" title="检查这位画师有没有新作品并下载（会先让你确认）">${icon("sync")}<span class="opt">检查新作</span></button>` : ""}
+        <button class="btn ghost" data-act="folder" title="在资源管理器中打开这位画师的文件夹">${icon("folder")}</button>
+        <button class="btn ghost ${inFolders.length ? "on" : ""}" data-act="folders" title="${inFolders.length ? "已在文件夹：" + esc(inFolders.join("、")) + "。点击调整" : "加入文件夹"}">${icon("folderplus")}<span class="opt">${inFolders.length ? esc(inFolders.length === 1 ? inFolders[0] : inFolders.length + " 个文件夹") : "加入文件夹"}</span></button>
+        <button class="btn ghost ${a.pinned ? "on" : ""}" data-act="pin" title="${a.pinned ? "取消置顶" : "置顶到侧栏"}">${icon("pin")}<span class="opt">${a.pinned ? "已置顶" : "置顶"}</span></button>
       </div>`;
   } else if (view.scope === "folder") {
     const fd = folderById(view.folder);
@@ -49,6 +52,7 @@ export function renderTitle() {
   document.title = (view.scope === "artist" ? ctx.artistByKey(view.artist)?.name : view.scope === "folder" ? folderById(view.folder)?.name
     : { all: "全部图片", recent: "最近查看", fav: "收藏" }[view.scope]) + " · Pixiv Viewer";
 }
+$("#title-area").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.matches('[role="link"]')) e.target.click(); });
 $("#title-area").addEventListener("click", (e) => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   if (b.dataset.act === "refresh") return loadWorks();
@@ -58,6 +62,7 @@ $("#title-area").addEventListener("click", (e) => {
   if (b.dataset.act === "sync") ctx.askSyncArtist(a);
   if (b.dataset.act === "pixiv") ctx.api.openUrl(`https://www.pixiv.net/users/${a.id}`);
   if (b.dataset.act === "folder") sysAction(ctx.api.reveal([a.folder]));
+  if (b.dataset.act === "folders") { const r = b.getBoundingClientRect(); artistFolderMenu(a, r.left, r.bottom + 4); }
   if (b.dataset.act === "pin") ctx.api.pinArtist(a.key, !a.pinned).then(() => { a.pinned = !a.pinned; renderSide(); renderTitle(); });
 });
 

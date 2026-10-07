@@ -487,6 +487,14 @@ def api_pending_summary(r):
     return data
 
 
+@route("POST", r"/api/avatars/check")
+def api_avatars_check(r):
+    """核对头像：头像文件夹里实际有哪些、还缺谁的，并把数据库里的记录改成和实际一致。不访问 Pixiv。"""
+    if r.app.runner.running:
+        raise HttpError(409, "任务运行中，结束后再核对")
+    return r.app.pro.check_avatars()
+
+
 @route("POST", r"/api/pending/skip")
 def api_pending_skip(r):
     """把符合条件的待下载标成“不下载”（restore=true 是恢复）。必须给出条件，不能一次全标。"""

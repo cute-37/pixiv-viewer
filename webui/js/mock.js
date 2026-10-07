@@ -394,6 +394,7 @@ function mockDownloader() {
       if (path === "/api/job" && method === "POST") { if (job.running) return err(409, "已有任务在运行，请先等待完成或点击「停止」"); run(body.kind, body); return ok({ ok: true }); }
       if (path === "/api/job/pause") { job.paused = true; job.message = "已暂停"; return ok({ ok: true, paused: true }); }
       if (path === "/api/job/resume") { job.paused = false; job.message = ""; return ok({ ok: true, resumed: true }); }
+      if (path === "/api/avatars/check") return ok({ artists: ARTISTS.length, have: ARTISTS.length - 2, missing: 2, fixed: 0, items: ARTISTS.slice(0, 2).map((a) => ({ id: a.id, name: a.name })) });
       if (path === "/api/pending/summary") {
         const src = body.skipped ? skippedQueue : queue, f = body.filters || {};
         const list = src.filter((a) => !f.types || f.types.some((t) => a[t] > 0)).filter((a) => !f.origin || (f.origin === "old" ? a.old > 0 : a.files > a.old));

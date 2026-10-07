@@ -34,7 +34,7 @@ KINDS: Dict[str, dict] = {
     "works_db": {"label": "作品数据库", "was": "pixiv_manager.db", "need": "核心",
                  "what": "画师、作品、标题、标签、分级和下载记录。没有它，图片只能按文件名显示。"},
     "dl_settings": {"label": "账号与下载设置", "was": "settings.json", "need": "可选",
-                    "what": "Pixiv 账号的登录凭证、保存位置、下载选项。不导入的话重新登录、重新设置即可。"},
+                    "what": "Pixiv 账号的登录凭证、保存位置、下载设置。不导入的话重新登录、重新设置即可。"},
     "avatars": {"label": "画师头像", "was": "avatars 文件夹", "need": "可选",
                 "what": "侧栏里的画师头像。不导入的话可以之后用“补全头像”从 Pixiv 下载。"},
     "viewer_db": {"label": "收藏与最近查看", "was": "webapp.db", "need": "可选",

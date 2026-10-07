@@ -5,13 +5,18 @@ import { ACTIONS, FIXED, GROUPS, comboLabel, comboOf, mouseCombo } from "./keyma
 import { FAMILIES, ACCENTS, FONTS, HEAD_FONTS, DEFAULTS, setDensity, markCustomDensity, palette } from "./settings.js";
 
 import { DL_SETTINGS_PAGES } from "./downloader.js";
+import { hintHTML } from "./help.js";
 
-// 侧栏分三段：界面、资料与下载（下载相关的设置页由 downloader.js 提供，名字前加 dl-）、其他
+// 侧栏分四段：界面、图库、下载、通用。名字前带 dl- 的页面整页由 downloader.js 提供。
+const DL = Object.fromEntries(DL_SETTINGS_PAGES.map(([k, t, ic]) => [k, ["dl-" + k, t, ic]]));
 const PAGES = [
   ["#", "界面"], ["look", "外观", "sun"], ["grid", "网格", "grid"], ["viewer", "看图", "fit"],
-  ["#", "资料与下载"], ["library", "资料库", "folder"], ...DL_SETTINGS_PAGES.map(([k, t, ic]) => ["dl-" + k, t, ic]),
-  ["#", "其他"], ["keys", "快捷键", "cmd"], ["about", "关于", "info"],
+  ["#", "图库"], ["library", "图库", "folder"], DL.link,
+  ["#", "下载"], DL.accounts, DL.storage, DL.content, DL.speed,
+  ["#", "通用"], ["general", "常规", "gear"], ["keys", "快捷键", "cmd"], ["about", "关于", "info"],
 ];
+// 这两页中间嵌着一段由 downloader.js 负责的内容：图库页里的“数据文件夹”，常规页里和下载任务有关的几项
+const EMBED = { library: "home", general: "general" };
 
 export function initDialogs(ctx) {
   const scrim = $("#scrim");
@@ -48,7 +53,15 @@ export function initDialogs(ctx) {
       box.scrollTop = 0;
       return ctx.dlMount(page.slice(3));
     }
-    box.innerHTML = { look, grid, viewer, library, keys, about }[page]();
+    const html = { look, grid, viewer, library, general, keys, about }[page]();
+    if (EMBED[page] && ctx.dlMount) {
+      // 自己的内容分成前后两段，中间留给 downloader.js；重画时只换自己的两段，不打扰中间那段
+      if (keepScroll && box.querySelector("#own-a")) { $("#own-a").innerHTML = html[0]; $("#own-b").innerHTML = html[1]; return; }
+      box.innerHTML = `<div id="own-a" class="own">${html[0]}</div><div id="dl-page" class="dl-host"></div><div id="own-b" class="own">${html[1]}</div>`;
+      box.scrollTop = 0;
+      return ctx.dlMount(EMBED[page]);
+    }
+    box.innerHTML = [].concat(html).join("");
     if (page === "about") mountUpdate(ctx, $("#upd-box"), ctx.lib.version);
     box.scrollTop = keepScroll ? top : 0;   // 切换到别的分页时从顶部开始
   }
@@ -57,7 +70,7 @@ export function initDialogs(ctx) {
   const seg = (key, opts) => `<div class="seg" data-set="${key}">${opts.map(([v, l]) => `<button data-v="${esc(String(v))}" class="${String(S()[key]) === String(v) ? "on" : ""}">${l}</button>`).join("")}</div>`;
   const sw = (key, on = S()[key]) => `<button class="switch ${on === true || on === "on" ? "on" : ""}" data-toggle="${key}" role="switch" aria-checked="${!!(on === true || on === "on")}"></button>`;
   const range = (key, min, max, step = 1, unit = "px") => `<input type="range" data-range="${key}" min="${min}" max="${max}" step="${step}" value="${S()[key]}" aria-label="${key}"><output>${S()[key]}${unit}</output>`;
-  const row = (title, hint, ctl) => `<div class="set"><div class="t">${title}${hint ? `<small>${hint}</small>` : ""}</div><div class="ctl">${ctl}</div></div>`;
+  const row = (title, hint, ctl) => `<div class="set"><div class="t">${title}${hintHTML(hint)}</div><div class="ctl">${ctl}</div></div>`;
   const group = (title, rows) => `<div class="group">${title ? `<div class="gh">${title}</div>` : ""}${rows.join("")}</div>`;
 
   function look() {
@@ -127,13 +140,11 @@ export function initDialogs(ctx) {
     const folders = lib.roots.map((r) => `<div class="f">${icon(r.auto ? "dl" : "folder")}<code title="${esc(r.path)}">${esc(r.path)}</code><small>${r.auto ? "下载的保存位置 · " : ""}${r.offline ? "未连接" : fmtNum(r.count) + " 张"}</small>
       ${r.auto ? `<button class="icon-btn xs" data-open-dl="storage" title="在“下载与更新 → 保存位置”里修改" aria-label="修改保存位置">${icon("gear")}</button>`
         : `<button class="icon-btn xs" data-rm-root="${esc(r.path)}" title="从资料库移除（不会删除文件）" aria-label="移除">${icon("x")}</button>`}</div>`).join("");
+    // 前一段：图片放在哪；（中间是数据文件夹，由 downloader.js 提供）；后一段：显示什么、缓存
     return [
       `<div class="group"><div class="gh">图片文件夹</div><div class="folders">${folders || `<div class="f"><small>还没有添加文件夹</small></div>`}</div>
         <div class="set"><div class="t"><small>支持本地目录和网络共享。下载的保存位置会自动包含在内。移除只影响资料库，不会删除任何文件。</small></div><div class="ctl"><button class="btn" data-act="add-root">${icon("plus")}添加文件夹</button></div></div></div>`,
-      group("作品信息与头像", [
-        row("来自数据文件夹", `标题、标签、分级、作品说明和画师头像都读自数据文件夹${lib.metadata?.ok ? "。" : "。现在还没有数据：可以导入已有的，或者下载过之后就会有。"}`,
-          ctx.dlMount ? `<button class="btn" data-page="dl-link">${icon("link")}数据与导入</button>` : ""),
-      ]),
+      [
       group("内容", [
         row("显示 R18 内容", "关闭后，R18 作品不会出现在任何地方（网格、预览、搜索建议、看图页的其他作品），工具栏上的分级切换也会隐藏。", sw("showR18")),
       ]),
@@ -142,11 +153,16 @@ export function initDialogs(ctx) {
           `为了翻页快，看过的图片会存一份小图在本机。${lib.cache?.maxBytes ? `超过 ${fmtSize(lib.cache.maxBytes)} 或 ${lib.cache.maxAgeDays} 天没用到的部分，会在下次启动时自动清掉。` : ""}清空不会影响任何图片，之后浏览时会重新生成。`,
           ctx.api.clearCache ? `<button class="btn" data-act="clear-cache" ${lib.cache?.size ? "" : "disabled"}>清空</button>` : ""),
       ]),
+      ].join(""),
+    ];
+  }
+  function general() {
+    return [[
       group("启动与关闭", [
         row("打开上次浏览的位置", "", sw("rememberLast")),
         ...(ctx.api.windowAction ? [row("关闭窗口时", "放到托盘后程序继续在后台运行，下载不会中断；点托盘里的图标回来，右键可以退出。", seg("closeAction", [["ask", "每次询问"], ["tray", "放到托盘"], ["exit", "直接退出"]]))] : []),
       ]),
-    ].join("");
+    ].join(""), ""];
   }
   // ---------- 快捷键：可以改 ----------
   let capture = null;      // 正在等新按键的那一格：{id, index}（index = -1 表示新加一个）

@@ -22,6 +22,7 @@ class JobState:
         self.failed = 0
         self.skipped = 0
         self.bytes = 0
+        self.transferred = 0  # 实际收到的字节数，边下边加（bytes 要等一个文件下完才加）；给界面算实时速度用
         self.message = ""
         self.error = None
         self.result = {}
@@ -98,6 +99,11 @@ class JobState:
             if w and not (w['state'] == 'stopped' and kw.get('state') not in (None, 'stopped')):
                 w.update(kw)
 
+    def add_transfer(self, n):
+        """正在下载的文件又收到 n 个字节。大文件（动图压缩包几十上百 MB）下载期间，文件数很久不变，靠它看得出还在动。"""
+        with self._lock:
+            self.transferred += n
+
     def worker_add(self, name, **inc):
         with self._lock:
             w = self.workers.get(name)
@@ -138,7 +144,7 @@ class JobState:
             snap = {
                 "id": self.id, "kind": self.kind, "params": self.params, "status": self.status,
                 "phase": self.phase, "total": self.total, "done": self.done, "success": self.success,
-                "failed": self.failed, "skipped": self.skipped, "bytes": self.bytes,
+                "failed": self.failed, "skipped": self.skipped, "bytes": self.bytes, "transferred": self.transferred,
                 "message": self.message, "error": self.error, "result": self.result,
                 "started": self.started, "finished": self.finished, "elapsed": round(elapsed, 1),
                 "current": dict(self.current), "workers": [dict(w) for w in self.workers.values()], "stopping": self.stopping, "run_id": self.run_id,

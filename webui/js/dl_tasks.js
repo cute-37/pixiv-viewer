@@ -34,7 +34,7 @@ export function createTasks(D) {
   // “完成后做什么”的下拉框：每次任务单独选；没填命令时“运行命令”选不了
   const afterSelect = () => (!api.jobWatch ? "" : `<select data-after aria-label="完成后">${AFTER.map(([v, l]) => {
     const noCmd = v === "command" && !((ctx.S && ctx.S.afterCommand) || "").trim();
-    return `<option value="${v}" ${(state.after || "none") === v ? "selected" : ""} ${noCmd ? "disabled" : ""}>${l}${noCmd ? "（先在“下载选项”里填命令）" : ""}</option>`;
+    return `<option value="${v}" ${(state.after || "none") === v ? "selected" : ""} ${noCmd ? "disabled" : ""}>${l}${noCmd ? "（先在“设置 → 常规”里填命令）" : ""}</option>`;
   }).join("")}</select>`);
   const viewerArtist = (authorId) => (ctx.lib && ctx.lib.artists || []).find((a) => String(a.id) === String(authorId));
   const pixivWork = (id) => `https://www.pixiv.net/artworks/${id}`;
@@ -150,7 +150,7 @@ export function createTasks(D) {
     }
     if (c.kind === "sync_download") {
       html += `<div class="gh">查完之后</div>
-        ${row("是否先让我看一眼", `“按设置”是指新发现的文件超过 ${fmtNum(plan.review_threshold || 0)} 个时先停下来（在“下载选项”里改）。`,
+        ${row("是否先让我看一眼", `“按设置”是指新发现的文件超过 ${fmtNum(plan.review_threshold || 0)} 个时先停下来（在“设置 → 下载内容”里改）。`,
           sel("review", [["auto", plan.review_threshold ? `按设置（超过 ${fmtNum(plan.review_threshold)} 个先问我）` : "按设置（不询问）"], ["always", "每次都先让我看"], ["never", "直接下载"]]))}`;
     }
     const valid = (state.accounts || []).filter((a) => a.is_valid);
@@ -172,7 +172,7 @@ export function createTasks(D) {
     return `<div class="group dl-confirm">
       <div class="dl-confirm-t">${icon("sync")}<b>${esc(c.title || KIND_LABEL[c.kind])}</b></div>
       <p>${esc(text)}</p>
-      <p class="dl-hint">期间会按“下载选项”里的间隔访问 Pixiv，可以随时暂停或停止。${plan.accounts_valid ? `将使用 ${plan.accounts_valid} 个账号。` : ""}</p>
+      <p class="dl-hint">期间会按“设置 → 速度与网络”里的间隔访问 Pixiv，可以随时暂停或停止。${plan.accounts_valid ? `将使用 ${plan.accounts_valid} 个账号。` : ""}</p>
       ${hasOpts && !c.simple ? `<button class="linkbtn dl-more" data-dl="opts">${state.optsOpen ? "收起选项" : "更多选项：查谁、下什么、用哪些账号…"}</button>${state.optsOpen ? optionsHTML(c, plan) : ""}` : ""}
       ${api.jobWatch ? `<div class="dl-after"><span>完成后</span>${afterSelect()}<small>${(state.after || "none") === "none" ? "只对这一次任务有效。" : "任务正常做完才会执行，执行前有倒计时可以取消；手动停止或出错时不执行。"}</small></div>` : ""}
       <div class="dl-actions"><button class="btn primary" data-dl="start">开始</button><button class="btn ghost" data-dl="cancel-ask">取消</button></div>

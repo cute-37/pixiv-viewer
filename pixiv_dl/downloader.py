@@ -179,6 +179,7 @@ class DownloadMixin:
                             raise InterruptedError("下载被中断")
                         if chunk:
                             chunks.append(chunk)
+                            self.job.add_transfer(len(chunk))
                     data = b''.join(chunks)
                 finally:
                     resp.close()

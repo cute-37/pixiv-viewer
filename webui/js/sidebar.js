@@ -61,6 +61,8 @@ export function openScope(scope, artist = null) {
   view.cur = null;
   ctx.closeViewer && ctx.closeViewer(true);
   renderSide();
+  // 从别处（搜索、看图页、失败列表）打开画师页时，侧栏滚到这位画师，不用自己找
+  if (scope === "artist") $("#artists .row-btn.on")?.scrollIntoView({ block: "nearest" });
   loadWorks(true);
   ctx.S.lastScope = { scope, artist: view.artist, folder: view.folder };
   persist();
@@ -269,8 +271,13 @@ function artistMenu(a, x, y) {
     ["在资源管理器中打开", () => sysAction(ctx.api.reveal([a.folder])), "folder"],
     ["在 Pixiv 打开主页", () => ctx.api.openUrl(`https://www.pixiv.net/users/${a.id}`), "ext"],
     "-",
-    { html: `<div class="mhead">加入文件夹</div>` },
-    ...(ctx.lib.folders || []).map((fd) => [fd.name, () => toggleFolder(fd, a), fd.artists.includes(a.key) ? "check" : ""]),
-    ["新建文件夹并加入…", () => newFolder([a.key]), "folderplus"],
+    ...folderItems(a),
   ], x, y);
 }
+const folderItems = (a) => [
+  { html: `<div class="mhead">加入文件夹</div>` },
+  ...(ctx.lib.folders || []).map((fd) => [fd.name, () => toggleFolder(fd, a), fd.artists.includes(a.key) ? "check" : ""]),
+  ["新建文件夹并加入…", () => newFolder([a.key]), "folderplus"],
+];
+/** 画师页标题栏上的“文件夹”按钮用：只有加入 / 移出文件夹这一段 */
+export function artistFolderMenu(a, x, y) { openMenu(folderItems(a), x, y); }

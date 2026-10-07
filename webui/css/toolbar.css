@@ -8,7 +8,16 @@
 .title .t { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .title .t .row { display: flex; align-items: baseline; gap: var(--gap); min-width: 0; }
 .title .big-avatar { width: calc(var(--title-fs) * 2.1); height: calc(var(--title-fs) * 2.1); font-size: calc(var(--title-fs) * 0.8); }
-.title .acts { display: flex; gap: 4px; flex: none; }
+/* 画师页的操作按钮靠右，和搜索框、筛选排成一组；左边只留“这是谁” */
+.title .acts { display: flex; gap: 2px; flex: none; margin-left: auto; }
+.title [role=link] { cursor: pointer; }
+.title h1 .go { width: 13px; height: 13px; margin-left: 6px; color: var(--text-3); opacity: 0; transition: opacity .12s; vertical-align: 1px; }
+.title h1[role=link]:hover, .title .big-avatar[role=link]:hover + .t h1 { color: var(--accent); }
+.title h1[role=link]:hover .go, .title .big-avatar[role=link]:hover + .t h1 .go, .title h1[role=link]:focus-visible .go { opacity: 1; color: var(--accent); }
+.title .big-avatar[role=link] { transition: box-shadow .12s; }
+.title .big-avatar[role=link]:hover { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+.title .acts .opt { max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1200px) { .title .acts .opt { display: none; } }   /* 窗口窄时只留图标，把位置让给画师信息 */
 .btn { height: calc(var(--ctl) - 2px); padding: 0 calc(var(--gap) * 1.25); border-radius: var(--radius); border: 1px solid var(--line); background: var(--surface); color: var(--text); white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
 .btn:hover { background: var(--sunken); }
 .btn svg { width: 14px; height: 14px; }

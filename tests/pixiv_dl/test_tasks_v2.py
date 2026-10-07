@@ -677,3 +677,52 @@ def test_periodic_rest_is_per_account_in_a_real_download(cfg, no_sleep, monkeypa
     for name, done in workers.items():                                    # 每个账号按自己下的数量休息
         assert pauses.count(name) == done // 3
     assert any('其他账号继续' in line['msg'] for line in pro.job.snapshot()['logs'])
+
+
+def test_check_avatars_reports_missing_and_corrects_records(cfg, no_sleep):
+    pro, api, db = avatar_setup(cfg, with_file_for=(10,))
+    db.upsert_artist(40, 'Gone', is_deleted=1)                           # 已注销的不算
+    db.conn.execute("UPDATE artists SET profile_image_local = NULL WHERE author_id = 10")
+    db.conn.commit()
+    r = pro.check_avatars()
+    assert (r['artists'], r['have'], r['missing']) == (3, 1, 2)
+    assert [x['name'] for x in r['items']] == ['Bob', 'Carol'] and r['fixed'] == 3
+    assert api.calls == [] and pro.session.requested == []               # 只看文件，不访问 Pixiv
+    rows = dict(db.conn.execute("SELECT author_id, COALESCE(profile_image_local, '') FROM artists WHERE author_id < 40"))
+    assert rows == {10: 'avatars/10.png', 20: '', 30: ''}                # 记录改成和实际一致
+    assert pro.check_avatars()['fixed'] == 0
+    assert [r[0] for r in db.get_artists_without_avatar()] == [20, 30]
+
+
+def test_avatar_lookups_are_shared_between_accounts(cfg, no_sleep, monkeypatch):
+    """地址失效、要向 Pixiv 问的头像：由所有账号分着做；被限速太久的账号退出，别的账号接着做"""
+    from pixiv_dl import ratelimit
+    people = {a: (f'P{a}', [a * 10 + 5]) for a in range(1, 9)}
+    api, other = api_with(people), api_with(people)
+    pro, _ = make_processor(api, {f'https://fresh.example/avatar/{a}.png': BLOB for a in people})
+    pro.clients['backup'] = make_client(other, name='backup', token='tok-b')
+    cfg.TOKENS['backup'] = {'token': 'tok-b', 'is_valid': True}
+    db = Database.local(cfg.DB_PATH)
+    for a, (name, _) in people.items():
+        db.upsert_artist(a, name)                                        # 没有记下头像地址：都得问接口
+    pro.download_missing_avatars()
+    asked = [sorted(c[1] for c in x.calls if c[0] == 'user_detail') for x in (api, other)]
+    assert sorted(asked[0] + asked[1]) == list(people) and asked[0] and asked[1]     # 每位只问一次，两个账号都出了力
+    assert pro.job.success == 8 and pro.avatar_ids() == set(people)
+    # 一个账号被限速太久：它不再参与，剩下的全由另一个账号完成
+    import os
+    for a in people:
+        os.remove(os.path.join(cfg.AVATARS_PATH, f'{a}.png'))
+    api.calls.clear(), other.calls.clear()
+    monkeypatch.setattr(ratelimit.RateGate, 'exhausted', lambda self, name: name == 'backup')
+    pro.download_missing_avatars()
+    assert not [c for c in other.calls if c[0] == 'user_detail'] and pro.job.success == 8
+
+
+def test_bytes_are_counted_while_a_file_is_still_downloading(cfg, no_sleep):
+    """大文件下载期间文件数不变，但“收到的字节数”边下边涨——界面靠它显示实时速度，不会看着像卡住"""
+    pro, _ = make_processor(None, {'https://img.example/big.zip': BLOB * 50})
+    assert pro.job.snapshot()['transferred'] == 0
+    data = pro._http_get('https://img.example/big.zip')
+    assert pro.job.snapshot()['transferred'] == len(data) == len(BLOB) * 50
+    assert pro.job.bytes == 0                                # 这个数要等文件处理完才加
