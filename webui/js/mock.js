@@ -72,6 +72,7 @@ function pickTags(i) {
 
 const NOW = 1759450000;
 const WORKS = [];
+let offline = new URLSearchParams(location.search).has("offline");     // ?offline=1：图库所在的共享没连上
 const COUNT = Math.min(20000, Math.max(30, +(new URLSearchParams(location.search).get("works")) || 150));
 for (let i = 0; i < COUNT; i++) {
   const a = ARTISTS[(i * 7) % ARTISTS.length], ar = ARS[i % ARS.length], r = rng(i * 977 + 5);
@@ -132,8 +133,8 @@ export const mock = {
     const counts = new Map(), updated = new Map();
     for (const w of WORKS) { counts.set(w.artistKey, (counts.get(w.artistKey) || 0) + w.pages.length); updated.set(w.artistKey, Math.max(updated.get(w.artistKey) || 0, w.posted)); }
     return {
-      roots: [{ path: "D:\\Pixiv", name: "Pixiv", count: WORKS.reduce((n, w) => n + w.pages.length, 0) }, { path: "\\\\NAS\\pixiv-archive", name: "pixiv-archive", count: 0, offline: true }],
-      artists: ARTISTS.map((a) => ({ ...a, count: counts.get(a.key) || 0, updated: updated.get(a.key) || 0 })),
+      roots: offline ? [{ path: "\\\\NAS\\pixiv", name: "pixiv", count: 0, offline: true, error: "用户名或密码不正确。", auto: true }] : [{ path: "D:\\Pixiv", name: "Pixiv", count: WORKS.reduce((n, w) => n + w.pages.length, 0) }, { path: "\\\\NAS\\pixiv-archive", name: "pixiv-archive", count: 0, offline: true }],
+      artists: offline ? [] : ARTISTS.map((a) => ({ ...a, count: counts.get(a.key) || 0, updated: updated.get(a.key) || 0 })),
       totals: { images: WORKS.reduce((n, w) => n + w.pages.length, 0), works: WORKS.length, fav: WORKS.filter((w) => w.fav).length, recent: WORKS.filter((w) => w.viewed).length },
       metadata: { path: "D:\\Pixiv\\db\\pixiv.db", ok: true },
       cache: { size: mockCacheSize, maxBytes: 500 * 1048576, maxAgeDays: 90 },
@@ -144,6 +145,7 @@ export const mock = {
   },
   async listWorks(q) {
     let list = WORKS.filter((w) => {
+      if (offline) return false;
       if (q.scope === "artist" && w.artistKey !== q.artist) return false;
       if (q.scope === "folder" && !(FOLDERS.find((f) => String(f.id) === String(q.folder))?.artists || []).includes(w.artistKey)) return false;
       if (q.scope === "fav" && !w.fav) return false;
@@ -384,6 +386,7 @@ function mockDownloader() {
     async dlStorageLink() { return { mode: settings.STORAGE_MODE, path: settings.STORAGE_MODE === "smb" ? `\\\\${settings.NAS_IP}\\${settings.NAS_SHARE}\\${settings.NAS_BASE_PATH.replace(/\//g, "\\")}` : settings.STORAGE_MODE === "local" ? settings.LOCAL_SAVE_PATH : "", readable: ["smb", "local"].includes(settings.STORAGE_MODE), inLibrary: ["smb", "local"].includes(settings.STORAGE_MODE), auto: true }; },
     async dlLinkLibrary() { linked = true; return { ok: true, ...(await this.dlStorageLink()) }; },
     async dlRefreshLibrary() { return { scanned: 0 }; },
+    async libraryReconnect() { offline = false; return { ok: true, indexing: false }; },
     async dl(method, path, body) {
       await wait(120);
       body = body || {};

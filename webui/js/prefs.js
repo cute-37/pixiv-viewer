@@ -1,6 +1,6 @@
 // 设置：保存、应用到界面
 import { $, $$, debounce } from "./util.js";
-import { applySettings } from "./settings.js";
+import { applySettings, withThemeFade } from "./settings.js";
 import { app, ctx, view } from "./state.js";
 import { loadWorks, renderGrid } from "./grid.js";
 
@@ -8,12 +8,14 @@ import { loadWorks, renderGrid } from "./grid.js";
 export const persist = debounce(() => ctx.api.saveConfig(ctx.S), 400);
 ctx.setSetting = (patch, opts = {}) => {
   Object.assign(ctx.S, patch);
-  applySettings(ctx.S);
-  syncChrome();
-  if (opts.reload) loadWorks();
-  else if (opts.grid) renderGrid();
-  persist();
-  ctx.onSettings && ctx.onSettings();
+  withThemeFade(ctx.S, () => {
+    applySettings(ctx.S);
+    syncChrome();
+    if (opts.reload) loadWorks();
+    else if (opts.grid) renderGrid();
+    persist();
+    ctx.onSettings && ctx.onSettings();
+  });
 };
 
 // 设置里关掉“显示 R18 内容”后，所有地方都只取全年龄作品

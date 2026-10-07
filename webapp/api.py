@@ -88,6 +88,8 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
         # 注意：pywebview 会把所有不以下划线开头的属性和方法暴露给网页，内部对象一律用私有名
         self._library = LibraryIndex(self._store, reader, lambda: self._library_roots())
         self._indexing = False
+        self._index_callbacks: tuple = (None, None)
+        self._share_error = ""       # 保存位置（SMB 共享）没连上时的原因
         self._rev = 0                # 评分、收藏、标签等每改一次加一
         self._views_rev = 0          # “最近查看”每变一次加一
         self._list_cache: Dict[str, tuple] = {}
@@ -155,7 +157,8 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
         for r in self._library.roots():
             count = sum(self._artist_info(a, pins)["count"] for a in artists if a.root == r)
             roots.append({"path": r, "name": os.path.basename(r.rstrip("\\/")) or r, "count": count,
-                          "offline": not any(a.root == r for a in artists) and not os.path.isdir(r),
+                          "offline": (off := not any(a.root == r for a in artists) and not os.path.isdir(r)),
+                          "error": self._root_error(r) if off else "",
                           # 下载的保存位置：自动包含，不能从资料库里移除
                           "auto": os.path.normcase(r) not in added})
         infos = [self._artist_info(a, pins) for a in artists]
@@ -191,8 +194,58 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
         self._cache_stat = (now, size)
         return size
 
+    def _connect_save_share(self) -> None:
+        """下载的保存位置是 SMB 共享时，用下载设置里填的账号登录它。
+
+        查看器是通过 Windows 直接读 //主机/共享 的；电脑重启后 Windows 不记得上次的登录，不先登录就读不到任何东西。
+        只在启动、保存了存储设置、用户点“重新连接”时各试一次，不会反复用错的密码去撞。
+        """
+        self._share_error = ""
+        target = self._download_target()
+        if target["mode"] != "smb" or not target["path"]:
+            return
+        try:
+            os.scandir(target["path"]).close()
+            return                                         # 本来就能读
+        except OSError as e:
+            reason = e.strerror or str(e)
+        login = self._downloader_data().smb_login()
+        if not login:
+            self._share_error = reason
+            return
+        from utils.network_mount import connect_share
+        ok, note = connect_share(login["share"], login["user"], login["password"])
+        if ok:
+            try:
+                os.scandir(target["path"]).close()
+                logger.info(f"已登录共享 {login['share']}" + (f"（{note}）" if note else ""))
+                return
+            except OSError as e:
+                note = e.strerror or str(e)
+        self._share_error = note or reason
+        logger.warning(f"连不上保存位置 {target['path']}: {self._share_error}")
+
+    def _root_error(self, root: str) -> str:
+        """这个文件夹为什么读不到（给界面显示）"""
+        if self._share_error and os.path.normcase(root) == os.path.normcase(self._download_target()["path"] or ""):
+            return self._share_error
+        try:
+            os.scandir(root).close()
+        except OSError as e:
+            return e.strerror or str(e)
+        return ""
+
+    def library_reconnect(self):
+        """图库所在的位置没连上时，用户点“重新连接”：再登录一次共享并重新扫描"""
+        if self._indexing:
+            return {"ok": True, "indexing": True}
+        self._library.forget_artists()
+        self._start_indexing(*self._index_callbacks)
+        return {"ok": True, "indexing": True}
+
     def _mount_network(self) -> None:
         """连接配置里启用的网络共享（SMB 等，凭据来自系统凭据库）；已连接时会直接复用"""
+        self._connect_save_share()
         mounts = getattr(self._cm.config, "network_mounts", None) or []
         if not mounts:
             return
@@ -213,6 +266,7 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
         """后台连接网络共享并扫描全部画师文件夹；扫描期间定期通知前端刷新"""
         if self._indexing:
             return
+        self._index_callbacks = (on_progress, on_done)
         self._indexing = True   # 先置位：前端此时请求“全部图片”会拿到已扫描的部分而不是同步等待
 
         def run():
@@ -673,6 +727,8 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
             self._dl_data.refresh()
         self._adopt_download_metadata()
         ids = {int(x) for x in (author_ids or []) if str(x).isdigit()}
+        if not ids:
+            self._connect_save_share()                     # 可能刚改了保存位置或它的账号
         self._library.forget_artists()                     # 可能多了新画师的文件夹
         artists = self._library.artists()
         targets = [a for a in artists if a.id in ids] if ids else artists

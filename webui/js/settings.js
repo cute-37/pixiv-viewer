@@ -114,6 +114,19 @@ export function loadPreviewFonts() {
   loadWebFont({ web: "M+PLUS+Rounded+1c:wght@400;500;700&family=LXGW+WenKai+TC:wght@400;700" });
 }
 
+/**
+ * 亮色 / 暗色切换时整页淡入淡出（0.5 秒，时长在 base.css 里），不然一下子全白或全黑很刺眼。
+ * 用的是浏览器的“视图过渡”：先拍下旧画面，执行 apply 换好颜色，再把新旧两张画面交叉淡化——
+ * 不管页面上有多少缩略图都一样流畅。亮暗没变、系统设置了“减少动态效果”或不支持时直接执行。
+ */
+export function withThemeFade(s, apply) {
+  const root = document.documentElement;
+  const changes = !!root.dataset.theme && palette(s).mode !== root.dataset.theme;
+  const calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!changes || calm || !document.startViewTransition) return apply();
+  document.startViewTransition(apply);
+}
+
 /** 把设置写到 :root 的 CSS 变量与 data-theme 上 */
 export function applySettings(s) {
   const p = palette(s);

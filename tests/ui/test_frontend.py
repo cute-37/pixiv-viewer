@@ -671,3 +671,32 @@ def test_after_job_settings_in_download_options(page):
     open_dl(page)
     page.click("[data-dl=ask][data-kind=sync]")
     assert not page.locator(".dl-confirm [data-after] option[value=command]").is_disabled()  # 填了命令之后可以选
+
+
+def test_unreachable_library_says_so_and_can_reconnect(page, base_url):
+    """图库在网络共享上、共享没连上时：说明是连不上（而不是“这里没有图片”），点“重新连接”后恢复"""
+    page.goto(f"{base_url}/index.html?works=200&offline=1")
+    box = page.locator("#grid-root .empty")
+    box.wait_for()
+    text = box.inner_text()
+    assert "连不上图库所在的位置" in text and "用户名或密码不正确" in text and "NAS" in text
+    assert "这里没有图片" not in text
+    box.get_by_role("button", name="重新连接").click()
+    page.locator("#grid-root .tile").first.wait_for()
+    assert page.locator("#grid-root .empty").count() == 0
+
+
+def test_light_dark_switch_cross_fades_for_half_a_second(page):
+    """切换亮色 / 暗色：整页 0.5 秒交叉淡化，结束后主题确实换了"""
+    before = page.evaluate("document.documentElement.dataset.theme")
+    page.click("#btn-mode")
+    page.wait_for_function("document.documentElement.dataset.theme !== %r" % before)
+    durations = page.evaluate(
+        "document.getAnimations().filter(a => (a.effect.pseudoElement || '').startsWith('::view-transition'))"
+        ".map(a => a.effect.getTiming().duration)")
+    assert durations and set(durations) == {500}
+    page.wait_for_function("!document.getAnimations().some(a => (a.effect.pseudoElement || '').startsWith('::view-transition'))")
+    # 只改别的设置（不换亮暗）时不做过渡
+    page.evaluate("window.__vt = 0; const o = document.startViewTransition.bind(document); document.startViewTransition = (f) => { window.__vt++; return o(f); }; 0")
+    page.evaluate("document.querySelector('#sort button:not(.on)').click()")
+    assert page.evaluate("window.__vt") == 0

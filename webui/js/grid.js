@@ -214,6 +214,13 @@ export function renderGrid() {
 ctx.renderGrid = renderGrid;
 const monthOf = (ts) => { const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
 
+async function reconnect(btn) {
+  btn.disabled = true; btn.textContent = "正在连接…";
+  await ctx.api.libraryReconnect();
+  await ctx.reloadLibrary();            // 后端开始重新扫描；扫完会再通知一次
+  ctx.loadWorks();
+}
+
 function emptyHTML() {
   if (ctx.lib.indexing && view.scope !== "artist") {
     return `<div class="empty"><div class="box"><div class="ic">${icon("clock")}</div><h3>正在扫描图库</h3>
@@ -223,6 +230,14 @@ function emptyHTML() {
     return `<div class="empty"><div class="box"><div class="ic">${icon("folder")}</div><h3>从这里开始</h3>
       <p>已经有图片：添加存放它们的文件夹，里面每个子文件夹算一位画师。<br>还没有：用“下载与更新”添加 Pixiv 账号，下载关注画师的作品。</p>
       <div class="acts"><button class="btn primary" data-act="add">${icon("plus")}添加文件夹</button>${ctx.openDownloader ? `<button class="btn" data-act="open-dl">${icon("dl")}下载与更新</button>` : ""}</div></div></div>`;
+  }
+  // 图库所在的位置（多半是网络共享）读不到：说清楚是没连上，而不是“没有图片”
+  const off = ctx.lib.roots.filter((r) => r.offline);
+  if (off.length === ctx.lib.roots.length && !ctx.lib.artists.length) {
+    return `<div class="empty"><div class="box"><div class="ic">${icon("warn")}</div><h3>连不上图库所在的位置</h3>
+      <p>${off.map((r) => `<code>${esc(r.path)}</code>${r.error ? `<br>${esc(r.error)}` : ""}`).join("<br>")}</p>
+      <p>图片和数据都还在，只是现在读不到。检查这台设备是否开着、网络是否正常；如果是共享的账号或密码变了，到“下载与更新 → 设置 → 保存位置”里改。</p>
+      <div class="acts"><button class="btn primary" data-act="reconnect">重新连接</button>${ctx.openDownloader ? `<button class="btn" data-act="open-dl">${icon("dl")}下载与更新</button>` : ""}</div></div></div>`;
   }
   const filtered = view.q || view.tags.size || Object.values(view.filters).some(Boolean) || (ctx.S.showR18 !== false && ctx.S.rating !== "all");
   if (filtered) {
@@ -236,6 +251,7 @@ $("#grid-root").addEventListener("click", (e) => {
   const act = e.target.closest("[data-act]");
   if (act && act.dataset.act === "add") return addFolder();
   if (act && act.dataset.act === "open-dl") return ctx.openDownloader();
+  if (act && act.dataset.act === "reconnect") return reconnect(act);
   if (act && act.dataset.act === "clear-filters") { view.q = ""; $("#q").value = ""; view.tags.clear(); view.filters = {}; ctx.setSetting({ rating: "all" }, { reload: true }); return; }
   const tile = e.target.closest(".tile"); if (!tile) return;
   const k = tile.dataset.k;

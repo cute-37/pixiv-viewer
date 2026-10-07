@@ -1,6 +1,6 @@
 // 应用入口：启动、拖动调整宽度、快捷键。其余按功能分在 sidebar / toolbar / grid / menu / prefs 里，共用状态在 state.js
 import { $, debounce, clamp, toast, initToast } from "./util.js";
-import { normalize, applySettings, loadPreviewFonts } from "./settings.js";
+import { normalize, applySettings, loadPreviewFonts, withThemeFade } from "./settings.js";
 import { connect } from "./api.js";
 import { announceUpdate } from "./update.js";
 import { createKeymap, comboOf, mouseCombo } from "./keymap.js";
@@ -129,7 +129,7 @@ document.addEventListener("keydown", (e) => handleCombo(comboOf(e), e));
 document.addEventListener("mousedown", (e) => { if (e.button === 3 || e.button === 4) e.preventDefault(); });
 document.addEventListener("mouseup", (e) => { const combo = mouseCombo(e); if (combo && (e.button !== 1 || keymap.find(combo, ["全局", "网格", "看图"]))) { if (e.button !== 1) e.preventDefault(); handleCombo(combo, e, true); } });
 window.addEventListener("resize", debounce(renderTagRow, 100));
-if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (ctx.S.mode === "system") { applySettings(ctx.S); syncChrome(); } });
+if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (ctx.S.mode === "system") withThemeFade(ctx.S, () => { applySettings(ctx.S); syncChrome(); }); });
 
 // ================= 启动 =================
 async function boot() {

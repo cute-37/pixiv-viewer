@@ -59,7 +59,7 @@ function desktopApi() {
       return lib;
     },
     // Pixiv 下载器（独立进程，经由后端转发）
-    dl: call("dl"), dlInfo: call("dl_info"), dlSetHome: call("dl_set_home"), dlMigrate: call("dl_migrate"), dlRefreshLibrary: call("dl_refresh_library"),
+    dl: call("dl"), dlInfo: call("dl_info"), dlSetHome: call("dl_set_home"), dlMigrate: call("dl_migrate"), dlRefreshLibrary: call("dl_refresh_library"), libraryReconnect: call("library_reconnect"),
     dlStorageLink: call("dl_storage_link"), dlLinkLibrary: call("dl_link_library"), openHome: call("open_home"),
     importPick: call("import_pick"), importApply: call("import_apply"),
     listWorks: async (q) => unpackWorks(await http("list_works")({ ...q, packed: 1 })),

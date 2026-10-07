@@ -243,6 +243,19 @@ class DownloaderData:
         self._target = (stamp, result)
         return dict(result)
 
+    def smb_login(self) -> Optional[dict]:
+        """保存位置是 SMB 共享并且填了账号时：{share, user, password}，供查看器自己去登录这个共享"""
+        try:
+            cfg = json.loads((self.root / "settings.json").read_text(encoding="utf-8")).get("current") or {}
+        except (OSError, ValueError, AttributeError):
+            return None
+        if (cfg.get("STORAGE_MODE") or "local") != "smb" or not cfg.get("NAS_IP") or not cfg.get("NAS_SHARE"):
+            return None
+        if not cfg.get("NAS_USER"):
+            return None
+        return {"share": f"\\\\{cfg['NAS_IP']}\\{cfg['NAS_SHARE']}", "user": str(cfg["NAS_USER"]),
+                "password": str(cfg.get("NAS_PASS") or "")}
+
     def author_names(self) -> Dict[int, str]:
         """画师 ID -> 最新的昵称（文件夹名是乱码短名或 Unknown 时用它）"""
         db = self.root / "db" / "pixiv_manager.db"

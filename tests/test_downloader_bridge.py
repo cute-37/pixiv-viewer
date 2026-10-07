@@ -176,7 +176,7 @@ def test_api_dl_passthrough_and_blocked_paths(fake_downloader, tmp_path, monkeyp
         store.close_thread_connection()
 
 
-def test_data_locations_follow_one_rule(tmp_path):
+def test_data_locations_follow_one_rule(tmp_path, monkeypatch):
     """保存位置自动属于资料库；元数据用下载数据里的数据库——不用分别设置"""
     import json
     from types import SimpleNamespace
@@ -225,6 +225,39 @@ def test_data_locations_follow_one_rule(tmp_path):
         configure(STORAGE_MODE="smb", NAS_IP="10.0.0.2", NAS_SHARE="media", NAS_BASE_PATH="图片/PIXIV")
         unc = chr(92) * 2 + chr(92).join(["10.0.0.2", "media", "图片", "PIXIV"])
         assert api.dl_storage_link()["path"] == unc and api._library.roots() == [unc]
+        # 共享没连上（比如电脑刚重启，Windows 不记得上次的登录）：用下载设置里的账号登录一次再读
+        assert api._dl_data.smb_login() is None                      # 没填账号：不去登录
+        configure(STORAGE_MODE="smb", NAS_IP="10.0.0.2", NAS_SHARE="media", NAS_BASE_PATH="图片/PIXIV",
+                  NAS_USER="me", NAS_PASS="secret")
+        share = chr(92) * 2 + chr(92).join(["10.0.0.2", "media"])
+        assert api._dl_data.smb_login() == {"share": share, "user": "me", "password": "secret"}
+        import utils.network_mount as nm
+        state = {"up": False, "calls": []}
+
+        class Dir:
+            def close(self):
+                pass
+
+        def fake_scandir(path):
+            if not state["up"]:
+                raise OSError(1326, "用户名或密码不正确。")
+            return Dir()
+
+        def fake_connect(share_, user, password):
+            state["calls"].append((share_, user, password))
+            state["up"] = state.get("accept", True)
+            return (True, "") if state["up"] else (False, "找不到网络路径。")
+
+        monkeypatch.setattr("webapp.api.os.scandir", fake_scandir)
+        monkeypatch.setattr(nm, "connect_share", fake_connect)
+        api._connect_save_share()
+        assert state["calls"] == [(share, "me", "secret")] and api._share_error == ""
+        api._connect_save_share()
+        assert len(state["calls"]) == 1                              # 已经能读：不再登录
+        state.update(up=False, accept=False)
+        api._connect_save_share()
+        assert api._share_error == "找不到网络路径。" and api._root_error(unc) == "找不到网络路径。"
+        monkeypatch.undo()
         # 查看器读不了的保存方式：不加进资料库
         configure(STORAGE_MODE="s3", S3_BUCKET="b")
         link = api.dl_storage_link()

@@ -325,6 +325,26 @@ class NetworkMountManager:
 _mount_manager: Optional[NetworkMountManager] = None
 
 
+def connect_share(share: str, username: str, password: str, timeout: float = MOUNT_TIMEOUT) -> tuple:
+    """用给定的账号登录一个 SMB 共享（//主机/共享），不占盘符、不写进系统的凭据库，只在这次开机期间有效。
+
+    返回 (是否可用, 说明)。电脑重启后 Windows 不会记得上次的登录，直接读 //主机/共享 会报“用户名或密码不正确”；
+    先调一次这个就能读了。已经连着（哪怕用的是别的账号）时不动它。
+    """
+    if not IS_WINDOWS:
+        return False, "只支持 Windows"
+    try:
+        code = _call_with_timeout(
+            lambda: NetworkMountManager._wnet_add_connection(share, None, username, password), timeout)
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+    if code == 0:
+        return True, ""
+    if code in (_ERROR_SESSION_CREDENTIAL_CONFLICT, _ERROR_ALREADY_ASSIGNED):
+        return True, "已经用别的账号连着这台设备"
+    return False, (ctypes.FormatError(code) or f"错误 {code}").strip()
+
+
 def get_mount_manager() -> NetworkMountManager:
     """获取全局挂载管理器实例"""
     global _mount_manager
