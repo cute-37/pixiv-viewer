@@ -75,7 +75,8 @@ class JobState:
     def worker_register(self, name, threads=1, role=''):
         with self._lock:
             self.workers[name] = {'name': name, 'role': role, 'threads': int(threads), 'alive': int(threads), 'active': 0,
-                                  'state': 'queue', 'text': '', 'note': '', 'success': 0, 'failed': 0, 'bytes': 0}
+                                  'state': 'queue', 'text': '', 'note': '', 'success': 0, 'failed': 0, 'bytes': 0,
+                                  'tasks': {}}     # 每个线程正在处理什么：{线程编号: 文字}（一个账号可以有几个线程）
 
     def worker_begin(self, name, text):
         with self._lock:
@@ -84,12 +85,14 @@ class JobState:
                 w['active'] += 1
                 w['state'] = 'working'
                 w['text'] = text
+                w['tasks'][threading.get_ident()] = text
 
     def worker_end(self, name, state='queue'):
         with self._lock:
             w = self.workers.get(name)
             if w:
                 w['active'] = max(0, w['active'] - 1)
+                w['tasks'].pop(threading.get_ident(), None)
                 if w['state'] != 'stopped' and w['active'] == 0:
                     w['state'] = state
 
@@ -147,7 +150,8 @@ class JobState:
                 "failed": self.failed, "skipped": self.skipped, "bytes": self.bytes, "transferred": self.transferred,
                 "message": self.message, "error": self.error, "result": self.result,
                 "started": self.started, "finished": self.finished, "elapsed": round(elapsed, 1),
-                "current": dict(self.current), "workers": [dict(w) for w in self.workers.values()], "stopping": self.stopping, "run_id": self.run_id,
+                "current": dict(self.current), "workers": [{**{k: v for k, v in w.items() if k != 'tasks'}, 'items': list(w['tasks'].values())}
+                                                           for w in self.workers.values()], "stopping": self.stopping, "run_id": self.run_id,
                 "paused": self.status == "running" and interrupt.is_paused(),
                 "detail": {g: {k: dict(v) for k, v in d.items()} for g, d in self.detail.items()},
             }

@@ -186,6 +186,14 @@ export function createTasks(D) {
     const eta = !job.paused && sp.ips > 0.01 && left > 0 ? fmtDur(left / sp.ips) : "";
     const workers = (job.workers || []).filter((w) => w.text || w.state || w.note);
     const logs = (job.logs || []).slice(-3);
+    // 一个账号可以有几个线程：每个线程正在处理的作品各占一行（账号名只写在第一行）。
+    // 账号整体在休息、暂停、被停用时只写一行状态。
+    const workerRows = (w) => {
+      const label = w.note || ({ resting: w.text || "休息中", paused: "已暂停", stopped: "已停用" }[w.state]);
+      const lines = label ? [label] : (w.items && w.items.length ? w.items : [w.text || ({ queue: "等待", waiting: "间隔中", done: "已完成" }[w.state] || "")]);
+      const many = (w.threads || 1) > 1 ? `<span class="th" title="这个账号用 ${w.threads} 个线程">×${w.threads}</span>` : "";
+      return lines.map((t, i) => `<div><span class="nm" title="${esc(w.name)}">${i ? "" : esc(w.name) + many}</span><span class="tx">${esc(t)}</span></div>`).join("");
+    };
     const checking = job.phase === "同步" || (job.kind.startsWith("sync") && job.phase !== "下载");
     return `<div class="group dl-run-card ${job.paused ? "paused" : ""}">
       <div class="dl-run-head"><span class="dl-spin"></span><b>${esc(KIND_LABEL[job.kind] || job.kind)}</b><span class="dl-phase">${job.paused ? "已暂停" : esc(job.phase === "同步" ? "检查中" : job.phase || "")}</span>
@@ -201,7 +209,7 @@ export function createTasks(D) {
       </div>
       ${job.message ? `<p class="dl-hint">${esc(job.message)}</p>` : ""}
       ${api.jobWatch ? `<div class="dl-after"><span>完成后</span>${afterSelect()}</div>` : ""}
-      ${workers.length ? `<div class="dl-workers">${workers.map((w) => `<div><span class="nm">${esc(w.name)}</span><span class="tx">${esc(w.note || w.text || ({ queue: "等待", waiting: "间隔中", done: "已完成", resting: "休息中", paused: "已暂停" }[w.state] || ""))}</span></div>`).join("")}</div>` : ""}
+      ${workers.length ? `<div class="dl-workers">${workers.map(workerRows).join("")}</div>` : ""}
       ${state.logsOpen ? logBox() : logs.length ? `<div class="dl-logs">${logs.map((l) => `<div>${esc(l.msg)}</div>`).join("")}</div>` : ""}
       <button class="linkbtn" data-dl="logs">${state.logsOpen ? "收起日志" : "查看详细日志"}</button>
     </div>`;

@@ -866,3 +866,15 @@ def test_one_click_on_artist_name_opens_pixiv_in_the_desktop_window(desktop_page
     assert len(pg.evaluate("window.__urls")) == 2 and pg.evaluate("window.__pvWindowActions") == []
     pg.locator('#title-area .meta').click()                              # 旁边的空白处仍然可以拖动窗口
     assert "drag" in pg.evaluate("window.__pvWindowActions")
+
+
+def test_running_card_shows_every_thread_of_an_account(page):
+    """任务进行时：一个账号有几个线程，就列出几行正在处理的作品（账号名只写在第一行）"""
+    open_dl(page)
+    page.click("[data-dl=ask][data-kind=download]")
+    page.click("[data-dl=start]")
+    page.wait_for_function("document.querySelectorAll('.dl-workers .tx').length >= 2")
+    rows = page.evaluate("[...document.querySelectorAll('.dl-workers > div')].map(d => [d.querySelector('.nm').innerText.trim(), d.querySelector('.tx').innerText])")
+    backup = [i for i, r in enumerate(rows) if r[0].startswith("backup")]
+    assert len(backup) == 1 and "×2" in rows[backup[0]][0]
+    assert "线程一" in rows[backup[0]][1] and rows[backup[0] + 1][0] == "" and "线程二" in rows[backup[0] + 1][1]

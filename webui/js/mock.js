@@ -315,7 +315,7 @@ function mockDownloader() {
     const files = one ? 6 : sync ? 40 : queue.filter((a) => !only || only.has(a.author_id)).reduce((n, a) => n + a.files, 0);
     const review = kind === "sync_download" && body.review !== "never";
     job = { id: "j" + Math.round(now()), kind, status: "running", running: true, total: sync ? (one ? 1 : ARTISTS.length) : files, done: 0, success: 0, failed: 0, skipped: 0, bytes: 0,
-      phase: sync ? "同步" : "下载", message: "", detail: {}, workers: [{ name: "main", text: "" }, { name: "backup", text: "" }], logs: [], elapsed: 0, started: now(), stopping: false };
+      phase: sync ? "同步" : "下载", message: "", detail: {}, workers: [{ name: "main", text: "", threads: 1, items: [] }, { name: "backup", text: "", threads: 2, items: [] }], logs: [], elapsed: 0, started: now(), stopping: false };
     let stage = sync ? "sync" : "download";
     clearInterval(timer);
     timer = setInterval(() => {
@@ -344,6 +344,7 @@ function mockDownloader() {
         else { job.success++; job.bytes += size; bump("downloaded", who, (x) => ({ name: who, files: (x.files || 0) + 1, bytes: (x.bytes || 0) + size })); }
       }
       job.workers[1].text = `下载 ${who} 的作品`;
+      job.workers[1].state = "working"; job.workers[1].items = [`下载 ${who} 的作品 · 线程一`, `下载 ${who} 的作品 · 线程二`];
       job.logs.push({ t: now(), msg: `[下载] ${who} · 第 ${job.done} 个` });
       if (job.done >= job.total) { job.result = { ...(job.result || {}), tasks: job.total }; queue = queue.filter((a) => only && !only.has(a.author_id)); finish("done"); }
     }, 450);

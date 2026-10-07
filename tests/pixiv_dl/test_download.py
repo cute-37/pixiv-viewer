@@ -474,3 +474,30 @@ def test_ugoira_not_found_on_one_account_is_retried_on_another(cfg, no_sleep):
     # 两个账号都问过了，才下“已删除”的结论
     assert [c for c in main.calls if c[0] == 'ugoira_metadata'] and [c for c in backup.calls if c[0] == 'ugoira_metadata']
     assert db.conn.execute("SELECT error_kind FROM illusts").fetchone() == ('deleted',)
+
+
+def test_each_thread_of_an_account_reports_what_it_is_doing():
+    """一个账号开两个线程：两个线程各自正在处理的作品都要报出来，不能后一个盖掉前一个"""
+    import threading
+    from pixiv_dl.progress import JobState
+    j = JobState('download')
+    j.worker_register('a', 2)
+    go, done = threading.Event(), threading.Event()
+
+    def other():
+        j.worker_begin('a', '作品二')
+        go.set()
+        done.wait(5)
+        j.worker_end('a')
+
+    t = threading.Thread(target=other)
+    t.start()
+    go.wait(5)
+    j.worker_begin('a', '作品一')
+    w = j.snapshot()['workers'][0]
+    assert sorted(w['items']) == ['作品一', '作品二'] and w['threads'] == 2 and 'tasks' not in w
+    j.worker_end('a')
+    assert j.snapshot()['workers'][0]['items'] == ['作品二']
+    done.set()
+    t.join()
+    assert j.snapshot()['workers'][0]['items'] == []

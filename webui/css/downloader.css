@@ -45,6 +45,7 @@
 .dl-workers { display: grid; gap: 2px; padding: 0 calc(var(--gap) * 1.5) var(--gap); font-size: calc(var(--fs) - 1px); }
 .dl-workers > div { display: flex; gap: var(--gap); min-width: 0; }
 .dl-workers .nm { flex: none; width: 96px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-workers .nm .th { margin-left: 4px; font-size: calc(var(--fs) - 3px); opacity: .75; }
 .dl-workers .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
 .dl-logs { margin: 0 calc(var(--gap) * 1.5); padding: 6px 8px; border-radius: var(--radius); background: var(--sunken); color: var(--text-3); font: calc(var(--fs) - 2px)/1.5 ui-monospace, Consolas, monospace; max-height: 76px; overflow: hidden; }
 .dl-logs.open { max-height: 260px; overflow: auto; }
