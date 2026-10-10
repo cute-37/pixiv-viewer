@@ -116,6 +116,23 @@
 .closeask-remember { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; margin-bottom: calc(var(--gap) * 1.75); cursor: pointer; }
 .closeask-remember input { accent-color: var(--accent); align-self: center; }
 .closeask-remember small { color: var(--text-3); }
+.notice-ask h3 { display: flex; align-items: center; gap: 8px; }
+.notice-ask h3 svg { color: #d98a1f; width: 18px; height: 18px; }
+.notice-ask .sub { color: var(--text-3); font-size: calc(var(--fs) - 1px); }
+.mcp-config { margin: 6px 0 0; padding: 8px 10px; border-radius: var(--radius); background: var(--sunken); font: calc(var(--fs) - 2px)/1.5 var(--mono); white-space: pre-wrap; word-break: break-all; color: var(--text-2); user-select: text; }
+.dev-list { display: grid; gap: 2px; padding: 0 calc(var(--gap) * 1.5) var(--gap); font-size: calc(var(--fs) - 1px); }
+.dev-list > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 4px 0; border-top: 1px solid var(--line); }
+.dev-list .st { width: 3em; flex: none; color: var(--text-3); }
+.dev-list .ok .st { color: #2a9d6a; }
+.dev-list .bad .st, .dev-list small.bad, small.bad { color: #d9534f; }
+.dev-list code { color: var(--text-3); font-size: calc(var(--fs) - 2px); }
+.dev-list .ms { margin-left: auto; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.dev-list small { flex-basis: 100%; color: var(--text-3); padding-left: calc(3em + 8px); white-space: pre-wrap; }
+.lang-choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); }
+.lang-ask .closeask-card { width: min(520px, calc(100vw - 32px)); }
+.lang-choices .btn { height: auto; padding: 12px; flex-direction: column; gap: 2px; }
+.lang-choices .btn b { font-size: calc(var(--fs) + 2px); }
+.lang-choices .btn small { opacity: .75; }
 .closeask-actions { display: flex; align-items: center; gap: var(--gap); }
 .closeask-actions .sp { flex: 1; }
 /* 快捷键设置：可以点的按键 */

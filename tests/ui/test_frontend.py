@@ -770,6 +770,7 @@ def test_long_setting_descriptions_hide_behind_a_help_mark(page):
     """设置页：长说明收进小问号，鼠标移上去才显示；短说明照常直接显示"""
     page.keyboard.press("Control+,")
     page.locator('.dnav [data-page="library"]').click()
+    page.wait_for_selector("#dpage .dl-file")                           # 等中间那段（数据文件夹）载入完，页面不再跳动
     row = page.locator(".set", has_text="显示 R18 内容")
     assert row.locator("small").count() == 0
     mark = row.locator(".help")
@@ -925,3 +926,303 @@ def test_fill_sizes_is_offered_under_maintenance(page):
     row.get_by_role("button", name="开始…").click()
     page.locator(".dl-confirm").wait_for()
     assert "不访问 Pixiv" in page.locator(".dl-confirm").inner_text()
+
+
+def test_first_run_welcome_leads_to_each_first_step(page, base_url):
+    """第一次打开（什么都还没有）：说明两种开始方式，每一步都能直接点过去"""
+    page.goto(f"{base_url}/index.html?fresh=1")
+    box = page.locator(".welcome")
+    box.wait_for()
+    text = box.inner_text()
+    assert all(x in text for x in ("我已经有图片", "添加文件夹", "从 Pixiv 下载", "登录 Pixiv 账号", "选保存位置", "检查关注的画师并下载"))
+    box.get_by_role("button", name="登录 Pixiv 账号").click()
+    page.wait_for_selector(".dnav [data-page=dl-accounts].on")
+    page.keyboard.press("Escape")
+    box.get_by_role("button", name="选保存位置").click()
+    page.wait_for_selector(".dnav [data-page=dl-storage].on")
+    page.keyboard.press("Escape")
+    box.get_by_role("button", name="以前用别的工具下载过").click()
+    page.wait_for_selector(".dnav [data-page=dl-link].on")
+    page.keyboard.press("Escape")
+    box.get_by_role("button", name="检查关注的画师并下载").click()
+    page.wait_for_selector(".dl-plan")
+
+
+def test_about_page_can_export_diagnostics_and_library_can_be_rescanned(page):
+    page.click("#btn-settings")
+    page.click(".dnav [data-page=about]")
+    row = page.locator(".set", has_text="导出诊断信息")
+    assert "不包含" in row.locator(".help-text").text_content()
+    row.get_by_role("button", name="导出…").click()
+    page.wait_for_function("document.querySelector('#toast-t').innerText.includes('已导出到')")
+    page.click(".dnav [data-page=library]")
+    page.locator("[data-act=rescan]").click()
+    page.wait_for_function("window.__rescans === 1")
+
+
+def test_important_notice_pops_up_and_leads_to_the_update_page(page, base_url):
+    """这个版本有严重问题时：打开软件就弹出提示，“去更新”直达“设置 → 关于”；下载面板里也有同一条提示"""
+    page.goto(f"{base_url}/index.html?works=60&notice=important")
+    box = page.locator(".notice-ask")
+    box.wait_for()
+    text = box.inner_text()
+    assert "下载功能已经不能用了" in text and "9.0.0" in text and "不会改动你的图片和数据" in text
+    box.get_by_role("button", name="稍后").click()
+    assert page.locator(".notice-ask").count() == 0
+    open_dl(page)
+    banner = page.locator(".dl-note.notice")
+    assert "Pixiv 调整了接口" in banner.inner_text()
+    banner.get_by_role("button", name="去更新").click()
+    page.wait_for_selector(".dnav [data-page=about].on")
+
+
+def test_download_only_notice_does_not_interrupt_browsing(page, base_url):
+    page.goto(f"{base_url}/index.html?works=60&notice=download")
+    page.wait_for_selector("#grid-root .tile")
+    page.wait_for_timeout(400)
+    assert page.locator(".notice-ask").count() == 0                       # 不弹窗
+    open_dl(page)
+    page.locator(".dl-note.notice").wait_for()
+
+
+def test_notices_can_be_turned_off_in_general_settings(page):
+    open_general(page)
+    sw = page.locator("[data-toggle-notices]")
+    assert sw.get_attribute("aria-checked") == "true"
+    assert "不上传任何信息" in page.locator(".set", has_text="接收重要更新提醒").locator(".help-text").text_content()
+    sw.click()
+    page.wait_for_selector("[data-toggle-notices][aria-checked=false]")
+
+
+# ---------------- 语言 ----------------
+def test_first_run_asks_for_language_and_english_is_applied(browser, base_url):
+    """第一次打开先问语言；选了 English 之后界面是英文的，用户自己的内容（画师名、标签）不动"""
+    context = browser.new_context(viewport={"width": 1280, "height": 800})
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{base_url}/index.html?works=120&firstrun=1")
+    ask = page.locator(".lang-ask")
+    ask.wait_for()
+    assert "选择语言" in ask.inner_text() and "Language" in ask.inner_text() and "言語" in ask.inner_text()     # 两种语言都写着
+    assert page.locator("#grid-root .tile").count() == 0                                    # 选之前不往下走
+    ask.get_by_role("button", name="English").click()
+    page.wait_for_selector("#grid-root .tile")
+    assert page.locator("#nav").inner_text().split("\n")[0] == "All images"
+    assert "Download & update" in page.locator(".side-foot").inner_text()
+    assert page.get_attribute("#q", "placeholder") == "Search artists, tags or file names"
+    assert "images" in page.locator("#title-area .meta").inner_text() and "张" not in page.locator("#title-area .meta").inner_text()
+    names = page.locator("#artists .row-btn[data-artist] .lbl").all_inner_texts()
+    assert "あおい凪" in names and "柚木" in names                                           # 画师名原样
+    assert page.evaluate("document.documentElement.lang") == "en"
+    # 设置页也是英文；换回中文后重新载入
+    page.click("#btn-settings")
+    assert page.locator(".dnav").inner_text().split()[:4] == ["Settings", "Interface", "Appearance", "Grid"]
+    page.click(".dnav [data-page=look]")
+    page.locator("[data-lang=zh]").click()
+    page.wait_for_function("document.documentElement.lang === 'zh-CN'")
+    page.wait_for_selector("#grid-root .tile")
+    assert page.locator("#nav").inner_text().split("\n")[0] == "全部图片"
+    assert page.locator(".lang-ask").count() == 0                                           # 选过了：不再问
+    context.close()
+    assert not errors, errors
+
+
+def test_main_screens_have_no_untranslated_text_in_english(browser, base_url):
+    """英文界面下把主要页面走一遍：除了用户自己的内容，不应该还有中文"""
+    context = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = context.new_page()
+    page.goto(f"{base_url}/index.html?works=200&lang=en&desktop=1")
+    page.wait_for_selector("#grid-root .tile")
+    page.locator("#grid-root .tile").first.click(button="right")
+    page.keyboard.press("Escape")
+    page.locator("#artists .row-btn[data-artist]").nth(2).click()
+    page.locator('#title-area [data-act="folders"]').wait_for()
+    page.click("#btn-settings")
+    for key, wait in (("look", "[data-lang]"), ("grid", ".set"), ("viewer", ".set"), ("library", "#dpage .dl-file"), ("dl-link", ".dl-kinds"),
+                      ("dl-accounts", ".set"), ("dl-storage", ".set"), ("dl-content", "[data-dltype]"), ("dl-speed", "[data-dlproxysel]"),
+                      ("general", "[data-dlnow=KEEP_AWAKE]"), ("keys", ".set"), ("about", "[data-act=diagnostics]")):
+        page.click(f".dnav [data-page={key}]")
+        page.wait_for_selector(f"#dpage {wait}" if not wait.startswith("#") else wait)
+    page.keyboard.press("Escape")
+    page.click("#btn-dl")
+    page.wait_for_selector(".dl-plan")
+    page.click("[data-dl=ask][data-kind=sync_download]")
+    page.click("[data-dl=opts]")
+    page.click("[data-dl=start]")
+    page.wait_for_selector("[data-dl=pause]")
+    page.click("[data-dlpage=failed]")
+    page.wait_for_selector("[data-dl=fail-tab]")
+    for tab in ("artists", "avatars"):
+        page.click(f"[data-dl=fail-tab][data-tab={tab}]")
+    page.wait_for_timeout(300)
+    missed = dict(page.evaluate("window.__i18nMissed()"))
+    # 这些是示例数据里的名字、标签、标题、备注（真实使用时是用户自己的内容），不是界面文字
+    data = page.evaluate("""async () => { const { ctx } = await import('./js/state.js');
+        const names = ctx.lib.artists.map(a => a.name).concat((ctx.lib.folders || []).map(f => f.name)); return names; }""")
+    leftovers = {t: where for t, where in missed.items()
+                 if not any(n in t for n in data) and not where.startswith(("button.tag", "b", "button.row-btn"))
+                 and t not in ("Zen 丸ゴシック",) and "小号" not in t and "示例" not in t and "预览" not in t}
+    context.close()
+    assert len(leftovers) <= 6, leftovers
+
+
+def test_backend_messages_are_translated_in_english():
+    """后端返回的错误 / 结果提示（它们是中文写的）在英文界面下要有译文：拿源码里实际的句子逐条查"""
+    import json
+    import re
+    import subprocess
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    string = r'(f?)"((?:[^"\\]|\\.)*)"'
+    found = set()
+    for name in ("pixiv_dl/web/server.py", "webapp/api.py", "webapp/updater.py", "webapp/importer.py", "webapp/downloader.py", "pixiv_dl/proxy.py"):
+        src = (root / name).read_text(encoding="utf-8")
+        for pat in (r'HttpError\(\s*\d+\s*,\s*' + string, r'UpdateError\(\s*' + string, r'DownloaderError\(\s*' + string, r'"(?:error|problem)"\s*:\s*' + string):
+            for m in re.finditer(pat, src):
+                text = re.sub(r"\{[^}]*\}", "7", m.group(2)) if m.group(1) else m.group(2)
+                if re.search(r"[\u4e00-\u9fff]", text):
+                    found.add(text)
+    assert len(found) > 60
+    script = """
+      import { translateWith } from './webui/js/i18n.js'; import EN from './webui/js/i18n_en.js';
+      const list = JSON.parse(process.argv[1]);
+      console.log(JSON.stringify(list.filter((t) => translateWith(EN, t) === null)));
+    """
+    out = subprocess.run(["node", "--input-type=module", "-e", script, json.dumps(sorted(found), ensure_ascii=False)],
+                         cwd=root, capture_output=True, text=True, encoding="utf-8")
+    assert out.returncode == 0, out.stderr
+    missing = json.loads(out.stdout.strip().splitlines()[-1])
+    # 这些只有写接口调用写错了才会出现，用户在界面上碰不到
+    internal = [t for t in missing if re.search(r"必须是|请求体|Host 不被允许|X-Pixiv-UI|未知任务类型|未知操作|只能清空|缺少 author_id|stale_days", t)]
+    assert sorted(set(missing) - set(internal)) == []
+
+
+def test_backup_section_in_library_settings(page):
+    """设置 → 图库：备份评分、收藏这些只存在本机的数据"""
+    page.click("#btn-settings")
+    page.click(".dnav [data-page=library]")
+    box = page.locator("#backup-box")
+    page.wait_for_function("document.querySelector('#backup-box').innerText.includes('最近一次自动备份')")
+    assert "评分、标签、收藏、画师文件夹" in box.inner_text()
+    sw = box.locator("[data-toggle-on=autoBackup]")
+    assert sw.get_attribute("aria-checked") == "true"                    # 默认开着
+    sw.click()
+    page.wait_for_selector("[data-toggle-on=autoBackup][aria-checked=false]")
+    page.locator("[data-act=backup-now]").click()
+    page.wait_for_function("document.querySelector('#toast-t').innerText.includes('已备份到')")
+
+
+def test_ai_assistant_access_is_off_by_default_and_shows_how_to_connect(page):
+    open_general(page)
+    box = page.locator("#mcp-box")
+    assert "on" in box.locator("[data-set=mcp] [data-v=off]").get_attribute("class")
+    assert box.locator(".mcp-config").count() == 0                       # 关着的时候不显示配置
+    box.locator("[data-set=mcp] [data-v=read]").click()
+    page.wait_for_function("document.querySelector('.mcp-config') && document.querySelector('.mcp-config').innerText.includes('--mcp')")
+    assert '"pixiv-viewer"' in page.locator(".mcp-config").inner_text()
+    assert "开放了 2 / 5 个工具" in page.locator("#mcp-box").inner_text()
+    page.locator("#mcp-box [data-v=full]").click()
+    page.wait_for_function("document.querySelector('#mcp-box').innerText.includes('开放了 5 / 5 个工具')")
+
+
+def test_developer_mode_adds_a_page_with_the_api_check(page):
+    """开发者模式默认关着；打开后设置里多出“开发者”一页，可以做接口体检"""
+    page.click("#btn-settings")
+    assert page.locator(".dnav [data-page=dev]").count() == 0
+    page.click(".dnav [data-page=about]")
+    page.locator("[data-toggle-dev]").click()
+    page.wait_for_selector(".dnav [data-page=dev].on")
+    page.locator("[data-dev=apicheck]").click()
+    page.wait_for_selector(".dev-list .bad")
+    text = page.locator("#dpage").inner_text()
+    assert "有接口和预期的不一样" in text and "没有 illusts[].meta_pages" in text and "跳过" in text
+    page.locator("[data-dev=notices]").click()
+    page.wait_for_function("document.querySelector('#dpage').innerText.includes('none for this version')")
+    page.click(".dnav [data-page=about]")
+    page.locator("[data-toggle-dev]").click()                            # 关掉：那一页消失
+    page.wait_for_function("!document.querySelector('.dnav [data-page=dev]')")
+
+
+def test_japanese_table_covers_everything_the_english_one_does():
+    """日语对照表要和英文的一一对应：英文加了条目，日语也得有（否则日语界面里那一处会变成英文）"""
+    import json
+    import subprocess
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    script = """
+      import EN from './webui/js/i18n_en.js'; import JA, { JA_EXACT, JA_PATTERNS } from './webui/js/i18n_ja.js';
+      const ph = (s) => (s.match(/\\{\\d+\\}/g) || []).sort().join();
+      const args = (s) => [...new Set(s.match(/\\$\\d|\\{t\\d\\}/g) || [])].sort().join();
+      console.log(JSON.stringify({
+        missing: Object.keys(EN.exact).filter((k) => !(k in JA_EXACT)),
+        extra: Object.keys(JA_EXACT).filter((k) => !(k in EN.exact)),
+        placeholders: Object.keys(JA_EXACT).filter((k) => ph(k) !== ph(JA_EXACT[k])),
+        patterns: EN.patterns.filter(([re]) => !(re.source in JA_PATTERNS)).map(([re]) => re.source),
+        patternArgs: EN.patterns.filter(([re, en]) => re.source in JA_PATTERNS && args(en) !== args(JA_PATTERNS[re.source])).map(([re]) => re.source),
+        sizes: [Object.keys(JA.exact).length, JA.patterns.length, Object.keys(EN.exact).length, EN.patterns.length],
+      }));
+    """
+    out = subprocess.run(["node", "--input-type=module", "-e", script], cwd=root, capture_output=True, text=True, encoding="utf-8")
+    assert out.returncode == 0, out.stderr
+    r = json.loads(out.stdout.strip().splitlines()[-1])
+    assert r["missing"] == [] and r["extra"] == [], r
+    assert r["placeholders"] == [] and r["patterns"] == [] and r["patternArgs"] == [], r
+    assert r["sizes"][0] == r["sizes"][2] and r["sizes"][1] == r["sizes"][3] and r["sizes"][0] > 1000
+
+
+def test_japanese_interface(browser, base_url):
+    """第一次打开选日本語：界面是日语的，用户自己的内容不动；主要页面上不应该还有中文的界面文字"""
+    context = browser.new_context(viewport={"width": 1400, "height": 900}, locale="ja-JP")
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda e: errors.append(str(e)))
+    page.goto(f"{base_url}/index.html?works=120&firstrun=1&desktop=1")
+    ask = page.locator(".lang-ask")
+    ask.wait_for()
+    assert "primary" in ask.locator("[data-pick-lang=ja]").get_attribute("class")          # 系统是日语：预选日本語
+    ask.get_by_role("button", name="日本語").click()
+    page.wait_for_selector("#grid-root .tile")
+    assert page.locator("#nav").inner_text().split("\n")[0] == "すべての画像"
+    assert page.get_attribute("#q", "placeholder") == "作者、タグ、ファイル名を検索"
+    assert page.evaluate("document.documentElement.lang") == "ja"
+    assert "あおい凪" in page.locator("#artists .row-btn[data-artist] .lbl").all_inner_texts()
+    page.locator("#artists .row-btn[data-artist]").nth(2).click()
+    page.locator('#title-area [data-act="folders"]').wait_for()
+    page.click("#btn-settings")
+    assert page.locator(".dnav").inner_text().split()[:4] == ["設定", "インターフェース", "外観", "グリッド"]
+    for key, wait in (("look", "[data-lang]"), ("grid", ".set"), ("viewer", ".set"), ("library", "#dpage .dl-file"), ("dl-link", ".dl-kinds"),
+                      ("dl-accounts", ".set"), ("dl-storage", ".set"), ("dl-content", "[data-dltype]"), ("dl-speed", "[data-dlproxysel]"),
+                      ("general", "[data-dlnow=KEEP_AWAKE]"), ("keys", ".set"), ("about", "[data-act=diagnostics]")):
+        page.click(f".dnav [data-page={key}]")
+        page.wait_for_selector(f"#dpage {wait}" if not wait.startswith("#") else wait)
+    page.keyboard.press("Escape")
+    page.click("#btn-dl")
+    page.wait_for_selector(".dl-plan")
+    assert "更新を確認してダウンロード" in page.locator(".dl-plan").inner_text()
+    page.click("[data-dl=ask][data-kind=sync_download]")
+    page.click("[data-dl=opts]")
+    page.click("[data-dl=start]")
+    page.wait_for_selector("[data-dl=pause]")
+    page.click("[data-dlpage=failed]")
+    page.wait_for_selector("[data-dl=fail-tab]")
+    page.wait_for_timeout(300)
+    missed = dict(page.evaluate("window.__i18nMissed()"))
+    data = page.evaluate("async () => { const { ctx } = await import('./js/state.js'); return ctx.lib.artists.map(a => a.name).concat((ctx.lib.folders || []).map(f => f.name)); }")
+    leftovers = {t: where for t, where in missed.items()
+                 if not any(n in t for n in data) and not where.startswith(("button.tag", "b", "button.row-btn"))
+                 and t not in ("Zen 丸ゴシック",) and "小号" not in t and "示例" not in t}
+    context.close()
+    assert not errors, errors
+    assert len(leftovers) <= 6, leftovers
+
+
+def test_animated_works_show_a_badge_and_can_be_filtered(page):
+    """动图的封面是静止的：卡片上有“动图”标记；筛选里可以只看动图"""
+    total = page.locator("#grid-root .tile").count()
+    marked = page.locator("#grid-root .tile .badge.anim").count()
+    assert 0 < marked < total and "动图" in page.locator("#grid-root .tile .badge.anim").first.inner_text()
+    page.click("#btn-filters")
+    page.locator("#filterpop [data-f=anim] [data-v=only]").click()
+    page.wait_for_function("document.querySelectorAll('#grid-root .tile').length === document.querySelectorAll('#grid-root .tile .badge.anim').length")
+    assert page.locator("#grid-root .tile").count() > 0

@@ -1,6 +1,6 @@
 // 悬停预览：鼠标在作品卡片上停一会儿，旁边浮出一张大一些的预览（多页作品可滚轮翻页）；
 // 停在侧栏的画师上，浮出这位画师最近的几张作品。浮层不接收鼠标事件，不会挡住操作。
-import { $, esc, fmtNum } from "./util.js";
+import { $, esc, fmtNum, icon } from "./util.js";
 
 const DELAY = 420;          // 停留多久才出现（毫秒），避免鼠标路过时到处弹
 const ARTIST_SHOTS = 6;
@@ -65,10 +65,17 @@ export function initHover(ctx) {
     peek.className = "peek";
     peek.style.width = width + "px";
     peek.innerHTML = `<div class="peek-img" style="height:${height}px"><img src="${esc(ctx.api.thumbSrc(p.thumb || p.path))}" alt="">
+        ${w.anim ? `<span class="badge anim peek-play">${icon("play")}动图</span>` : ""}
         ${many ? `<span class="peek-pg">${page + 1} / ${w.pages.length}</span>` : ""}</div>
       <div class="peek-cap"><b>${esc(w.title)}</b><span>${esc(w.artistName)}${many ? (tile.dataset.k ? " · 滚轮翻页" : ` · 共 ${w.pages.length} 页`) : ""}</span></div>`;
     peek.hidden = false;
     place(tile, width, height + capH, tile.closest("#info") || tile);
+    // 动图：缩略图是静止的第一帧。预览出来之后去读原文件，读到了就换上去播放（鼠标移走了就不换）
+    if (w.anim && ctx.api.imageUrl) {
+      const img = peek.querySelector(".peek-img img"), full = new Image();
+      full.onload = () => { if (!peek.hidden && peek.contains(img)) { img.src = full.src; peek.querySelector(".peek-play")?.remove(); } };
+      full.src = ctx.api.imageUrl(p.path);
+    }
   }
 
   const grid = $("#grid-root");

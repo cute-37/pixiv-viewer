@@ -414,6 +414,39 @@ def wait_for_exit(pid: int, timeout: float = WAIT_EXIT_SECS) -> bool:
         kernel32.CloseHandle(handle)
 
 
+def _install_lang(target: Path) -> str:
+    """这份安装用的是什么界面语言（替换程序的进程什么都没初始化，直接读设置文件）"""
+    try:
+        data = json.loads((target / "data" / "config" / "web_ui.json").read_text(encoding="utf-8"))
+        code = str(data.get("lang") or "")
+        return "en" if code.startswith("en") else "ja" if code.startswith("ja") else "zh"
+    except (OSError, ValueError, AttributeError):
+        return "zh"
+
+
+_ERRORS_EN = {"更新程序的位置不对": "the updater is in the wrong place", "旧版本一直没有退出": "the old version never exited",
+              "新版本的文件夹是空的": "the new version's folder is empty"}
+
+
+_ERRORS_JA = {"更新程序的位置不对": "更新プログラムの場所が正しくありません", "旧版本一直没有退出": "古いバージョンが終了しませんでした",
+              "新版本的文件夹是空的": "新しいバージョンのフォルダが空です"}
+
+
+def _failure_text(error: str, lang: str) -> tuple:
+    """更新失败时弹出的那段话：(内容, 标题)"""
+    if lang == "ja":
+        m = re.match(r"^(.+) 还在被占用，没法替换（(.+)）$", error)
+        reason = f"{m.group(1)} が使用中のため置き換えられません（{m.group(2)}）" if m else _ERRORS_JA.get(error, error)
+        return (f"更新は完了しませんでした。アプリは元のバージョンのままです。\n\n原因：{reason}\n\n"
+                "あとでもう一度試すか、配布ページから手動でダウンロードしてください。"), "更新"
+    if lang != "en":
+        return f"更新没有完成，程序保持原来的版本。\n\n原因：{error}\n\n可以稍后重试，或到发布页面手动下载。", "更新"
+    m = re.match(r"^(.+) 还在被占用，没法替换（(.+)）$", error)
+    reason = f"{m.group(1)} is still in use and cannot be replaced ({m.group(2)})" if m else _ERRORS_EN.get(error, error)
+    return (f"The update did not complete; the app stays on its current version.\n\nReason: {reason}\n\n"
+            "Try again later, or download it manually from the release page."), "Update"
+
+
 def _message(text: str, title: str = "更新") -> None:
     if os.name == "nt":
         import ctypes
@@ -451,7 +484,7 @@ def apply_main(args: List[str]) -> int:
     launch = target / exe.name
     if error:
         log(f"更新失败: {error}")
-        _message(f"更新没有完成，程序保持原来的版本。\n\n原因：{error}\n\n可以稍后重试，或到发布页面手动下载。")
+        _message(*_failure_text(error, _install_lang(target)))
     else:
         try:
             marker = target / "data" / "update" / "done.json"

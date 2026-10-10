@@ -28,6 +28,9 @@
 .badges { position: absolute; left: 6px; top: 6px; display: flex; gap: 3px; }
 .badge { height: 17px; padding: 0 5px; border-radius: 4px; background: rgb(0 0 0 / 0.55); color: #fff; font-size: 10px; font-weight: 600; line-height: 17px; }
 .badge.r18 { background: #d6334a; }
+.badge.anim { display: inline-flex; align-items: center; gap: 2px; background: rgb(var(--shadow-rgb) / 0.62); }
+.badge.anim svg { width: 9px; height: 9px; fill: currentColor; stroke: none; }
+.peek-img .peek-play { position: absolute; left: 8px; top: 8px; }
 .no-badges .badges { display: none; }
 /* 右下角：页数（只是信息）+ 展开按钮（一直可见的小箭头，鼠标移到卡片上时带出文字） */
 .pagebar { position: absolute; right: 6px; bottom: 6px; z-index: 1; display: flex; align-items: center; gap: 3px; }
@@ -71,6 +74,18 @@
 .empty .ic svg { width: 26px; height: 26px; }
 .empty h3 { margin: 0; font: 700 calc(var(--fs) + 5px) var(--font-head); color: var(--text); }
 .empty p { margin: 0; line-height: 1.6; }
+/* 第一次打开时的引导 */
+.welcome { width: min(820px, 100%); padding: 0 16px; }
+.welcome > h3 { font-size: calc(var(--fs) + 9px); }
+.welcome .lead { margin: 6px 0 20px; }
+.welcome .ways { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; text-align: left; }
+.welcome section { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; padding: 18px; border: 1px solid var(--line); border-radius: calc(var(--radius) + 4px); background: var(--surface); }
+.welcome section .ic { width: 40px; height: 40px; margin: 0; }
+.welcome section .ic svg { width: 18px; height: 18px; }
+.welcome h4 { margin: 0; font: 700 calc(var(--fs) + 2px) var(--font-head); color: var(--text); }
+.welcome .steps { margin: 0; padding-left: 20px; display: grid; gap: 10px; color: var(--text); }
+.welcome .steps small { display: block; color: var(--text-3); line-height: 1.5; }
+.welcome section > .linkbtn { white-space: normal; text-align: left; font-size: calc(var(--fs) - 1px); }
 .empty .acts { display: flex; gap: 8px; margin-top: 8px; }
 
 .status { height: calc(var(--ctl) - 4px); display: flex; align-items: center; gap: calc(var(--gap) * 1.5); padding: 0 calc(var(--gap) * 2); border-top: 1px solid var(--line); color: var(--text-3); font-size: calc(var(--fs) - 1.5px); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }

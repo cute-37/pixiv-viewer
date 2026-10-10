@@ -3,8 +3,9 @@
 """
 关闭窗口时放到系统托盘，以及“同一份数据只开一个程序”
 
-- Tray：把窗口藏起来、在托盘区放一个图标；点图标回来，右键菜单里可以退出。藏起来期间程序照常运行，
-  下载不会中断。托盘图标用的是 WinForms 的 NotifyIcon（pywebview 在 Windows 上本来就用 WinForms）。
+- Tray：把窗口藏起来、在托盘区放一个图标；点图标回来。藏起来期间程序照常运行，下载不会中断。
+  鼠标停在图标上会显示现在在做什么（下载到多少、速度、是否暂停）；右键菜单里可以暂停 / 继续 / 停止任务、
+  直接打开“下载与更新”或“设置”、退出。托盘图标用的是 WinForms 的 NotifyIcon（pywebview 在 Windows 上本来就用 WinForms）。
 - CloseMixin：给界面用的接口。关闭时怎么办（每次询问 / 放到托盘 / 直接退出）由界面按设置决定，
   这里只负责执行；从任务栏、Alt+F4 关窗口时不直接关，而是转给界面去问。
 - SingleInstance：放到托盘后人很容易忘了它还开着，再点一次图标就会开出第二个——两个程序同时下载会抢同一个
@@ -21,20 +22,172 @@ import threading
 from pathlib import Path
 from typing import Callable, Optional
 
+from utils.lang import pick
 from utils.logger import get_logger
 
 logger = get_logger("Tray")
 
 
+TIP_MAX = 63          # 托盘图标的悬浮提示最多这么长（系统的限制，超了会报错）
+POLL_SECS = 2.0       # 窗口在托盘里时，多久看一次任务进行到哪了
+
+
+def _size(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return ""
+
+
+def describe_job(job: Optional[dict], speed: float = 0.0) -> dict:
+    """把任务的状态写成托盘上用的几句话：{state: idle|running|paused, line, detail}
+
+    line：一行说清现在在做什么（菜单第一行、悬浮提示都用它）；detail：再补一句（速度、失败数）。
+    """
+    if not job or not (job.get("running") or job.get("status") == "running"):
+        return {"state": "idle", "line": pick("没有任务在运行", "No job running", "実行中のタスクはありません"), "detail": ""}
+    kind = str(job.get("kind") or "")
+    checking = job.get("phase") == "同步" or (kind.startswith("sync") and job.get("phase") != "下载")
+    done, total = int(job.get("done") or 0), int(job.get("total") or 0)
+    what = pick("检查中", "Checking", "確認中") if checking else pick("下载中", "Downloading", "ダウンロード中")
+    paused = bool(job.get("paused"))
+    if paused:
+        what = pick("已暂停", "Paused", "一時停止中")
+    progress = f"{done:,} / {total:,}" + (f" ({done * 100 // total}%)" if total else "") if total else f"{done:,}"
+    bits = []
+    if speed > 1024 and not paused:
+        bits.append(f"{_size(speed)}/s")
+    if job.get("failed"):
+        bits.append(pick(f"失败 {job['failed']}", f"{job['failed']} failed", f"失敗 {job['failed']}"))
+    idle = int(job.get("idle") or 0)
+    if idle >= 120 and not paused:
+        bits.append(pick(f"{idle // 60} 分钟没有进展", f"no progress for {idle // 60} min", f"{idle // 60} 分間進捗なし"))
+    return {"state": "paused" if paused else "running", "line": f"{what} {progress}", "detail": " · ".join(bits)}
+
+
+def tooltip(title: str, status: dict) -> str:
+    text = title + "\n" + status["line"] + ("\n" + status["detail"] if status["detail"] else "")
+    return text[:TIP_MAX]
+
+
 class Tray:
-    def __init__(self, window, title: str, icon_path, on_quit: Callable[[], None]) -> None:
+    def __init__(self, window, title: str, icon_path, on_quit: Callable[[], None],
+                 job: Optional[Callable[[], Optional[dict]]] = None, actions: Optional[dict] = None) -> None:
+        """job()：现在的任务状态（没有下载功能、或下载进程还没启动时返回 None）；
+        actions：菜单里能做的事 {pause, resume, stop, downloader, settings}，没给的那一项不出现。"""
         self.window = window
         self.title = title
         self.icon_path = str(icon_path or "")
         self.on_quit = on_quit
+        self._job = job
+        self._actions = actions or {}
         self._icon = None
+        self._items = {}                # 菜单项：名字 -> ToolStripMenuItem
         self._keep = []                 # 事件处理函数要一直被引用着
         self.hidden = False
+        self.status = describe_job(None)
+        self.tip = title                # 现在的悬浮提示（测试和诊断用）
+        self._last = (0.0, 0)           # 上一次看的时间和已收到的字节数（算速度）
+        self._poller = None
+
+    # ---- 任务状态：窗口在托盘里时每隔一会儿看一眼，更新悬浮提示
+    def refresh(self, now: Optional[float] = None) -> dict:
+        """看一眼任务进行到哪了，更新 status / tip。不动界面，可以在任何线程里调用。"""
+        import time
+        job = None
+        try:
+            job = self._job() if self._job else None
+        except Exception as e:
+            logger.debug(f"托盘读取任务状态失败: {e}")
+        now = now or time.time()
+        speed = 0.0
+        if job:
+            got = int(job.get("transferred") or job.get("bytes") or 0)
+            t0, b0 = self._last
+            if t0 and now > t0 and got >= b0:
+                speed = (got - b0) / (now - t0)
+            self._last = (now, got)
+        else:
+            self._last = (0.0, 0)
+        self.status = describe_job(job, speed)
+        self.tip = tooltip(self.title, self.status)
+        return self.status
+
+    def _poll(self) -> None:
+        import time
+        while self.hidden and self._icon is not None:
+            self.refresh()
+            tip = self.tip
+
+            def apply(tip=tip):
+                if self._icon is not None:
+                    self._icon.Text = tip
+            try:
+                self._ui(apply)
+            except Exception:
+                return                      # 窗口没了
+            time.sleep(POLL_SECS)
+
+    def menu_state(self) -> list:
+        """右键菜单现在该是什么样：[(名字, 文字, 是否显示, 是否可点)]。根据最近一次看到的任务状态。"""
+        st, a = self.status, self._actions
+        running, paused = st["state"] != "idle", st["state"] == "paused"
+        return [
+            ("open", pick(f"打开 {self.title}", f"Open {self.title}", f"{self.title} を開く"), True, True),
+            ("status", st["line"] + (f"  ·  {st['detail']}" if st["detail"] else ""), self._job is not None, False),
+            ("pause", pick("暂停任务", "Pause job", "タスクを一時停止"), running and not paused and "pause" in a, True),
+            ("resume", pick("继续任务", "Resume job", "タスクを再開"), paused and "resume" in a, True),
+            ("stop", pick("停止任务", "Stop job", "タスクを停止"), running and "stop" in a, True),
+            ("downloader", pick("下载与更新…", "Download && update…", "ダウンロードと更新…"), "downloader" in a, True),
+            ("settings", pick("设置…", "Settings…", "設定…"), "settings" in a, True),
+            ("quit", pick("退出", "Quit", "終了"), True, True),
+        ]
+
+    def _sync_menu(self) -> list:
+        """把真正的菜单项摆成 menu_state() 说的样子（在界面线程里）。返回摆好之后实际显示的各项文字。"""
+        shown = []
+        for name, text, visible, enabled in self.menu_state():
+            item = self._items.get(name)
+            if item is not None:
+                item.Text, item.Visible, item.Enabled = text, visible, enabled
+                if visible:
+                    shown.append(str(item.Text))
+        return shown
+
+    def native_state(self) -> dict:
+        """真正的托盘图标现在是什么样（诊断和测试用）：图标在不在、悬浮提示、菜单里实际显示的各项"""
+        out = {"icon": False, "tip": "", "menu": []}
+        if self._icon is None:
+            return out
+
+        def read():
+            out.update(icon=bool(self._icon.Visible), tip=str(self._icon.Text), menu=self._sync_menu())
+        try:
+            self._ui(read)
+        except Exception as e:
+            out["error"] = str(e)
+        return out
+
+    def _act(self, name: str) -> None:
+        """菜单里点了一项（在界面线程里）"""
+        if name == "open":
+            return self._restore_now()
+        if name == "quit":
+            return self._quit_from_menu()
+        fn = self._actions.get(name)
+        if fn is None:
+            return
+        if name in ("downloader", "settings"):
+            self._restore_now()             # 先把窗口叫出来，再让界面打开对应的面板
+        threading.Thread(target=self._run_action, args=(name, fn), name=f"tray-{name}", daemon=True).start()
+
+    def _run_action(self, name: str, fn) -> None:
+        try:
+            fn()
+        except Exception as e:
+            logger.warning(f"托盘菜单“{name}”没有成功: {e}")
+        self.refresh()
 
     def _ui(self, fn) -> None:
         """在界面线程里执行（托盘图标和窗口都属于它）"""
@@ -49,7 +202,10 @@ class Tray:
         clr.AddReference("System.Drawing")
         from System import EventHandler
         from System.Drawing import Icon, SystemIcons
-        from System.Windows.Forms import ContextMenuStrip, MouseButtons, MouseEventHandler, NotifyIcon, ToolStripMenuItem
+        from System.ComponentModel import CancelEventHandler
+        from System.Drawing import FontStyle, Font
+        from System.Windows.Forms import (ContextMenuStrip, MouseButtons, MouseEventHandler, NotifyIcon, ToolStripMenuItem,
+                                          ToolStripSeparator)
 
         icon = NotifyIcon()
         try:
@@ -62,21 +218,30 @@ class Tray:
             if args.Button == MouseButtons.Left:
                 self._restore_now()
 
-        open_handler = EventHandler(lambda s, a: self._restore_now())
-        quit_handler = EventHandler(lambda s, a: self._quit_from_menu())
         click_handler = MouseEventHandler(on_click)
         menu = ContextMenuStrip()
-        show_item = ToolStripMenuItem(f"打开 {self.title}")
-        show_item.Click += open_handler
-        quit_item = ToolStripMenuItem("退出")
-        quit_item.Click += quit_handler
-        menu.Items.Add(show_item)
-        menu.Items.Add(quit_item)
+        for name, text, _visible, _enabled in self.menu_state():
+            item = ToolStripMenuItem(text)
+            handler = EventHandler(lambda s, a, n=name: self._act(n))
+            item.Click += handler
+            if name == "open":
+                item.Font = Font(item.Font, FontStyle.Bold)        # 左键单击的默认动作
+            if name in ("pause", "downloader", "quit"):
+                sep = ToolStripSeparator()
+                menu.Items.Add(sep)
+                self._keep.append(sep)
+            menu.Items.Add(item)
+            self._items[name] = item
+            self._keep += [item, handler]
+
+        # 每次打开菜单时按最近看到的任务状态摆一遍（哪些项出现、写什么）。这里不去问下载进程，免得菜单卡一下
+        opening_handler = CancelEventHandler(lambda s, a: self._sync_menu())
+        menu.Opening += opening_handler
         icon.ContextMenuStrip = menu
         icon.MouseClick += click_handler
         balloon_handler = EventHandler(lambda s, a: self._restore_now())      # 点通知：把窗口叫出来
         icon.BalloonTipClicked += balloon_handler
-        self._keep += [open_handler, quit_handler, click_handler, balloon_handler, menu, show_item, quit_item]
+        self._keep += [click_handler, balloon_handler, opening_handler, menu]
         self._icon = icon
 
     def notify(self, title: str, text: str = "") -> bool:
@@ -121,6 +286,9 @@ class Tray:
             self._ui(run)
             self.hidden = True
             logger.info("窗口已放到托盘")
+            if self._poller is None or not self._poller.is_alive():
+                self._poller = threading.Thread(target=self._poll, name="tray-status", daemon=True)
+                self._poller.start()
             return True
         except Exception as e:
             logger.warning(f"放到托盘失败，改为最小化: {e}")
@@ -180,9 +348,27 @@ class CloseMixin:
     _tray: Optional[Tray] = None
     _quitting = False
 
+    def _tray_job(self) -> Optional[dict]:
+        """托盘上显示的任务状态。有下载功能的类覆盖它；默认没有。"""
+        return None
+
+    def _tray_actions(self) -> dict:
+        """托盘右键菜单里除了“打开”“退出”还能做的事。有下载功能的类覆盖它。"""
+        return {}
+
+    def tray_info(self):
+        """托盘现在的样子（悬浮提示、菜单里有哪些项），诊断和测试用"""
+        t = self._tray
+        if t is None:
+            return {"hidden": False, "tip": "", "menu": []}
+        t.refresh()
+        return {"hidden": t.hidden, "tip": t.tip, "state": t.status["state"],
+                "menu": [{"name": n, "text": text, "enabled": enabled} for n, text, visible, enabled in t.menu_state() if visible],
+                "native": t.native_state()}
+
     def _init_close(self, title: str, icon_path) -> None:
         window = self._window
-        self._tray = Tray(window, title, icon_path, self._quit)
+        self._tray = Tray(window, title, icon_path, self._quit, job=self._tray_job, actions=self._tray_actions())
 
         def on_closing():
             # 从任务栏、Alt+F4 关窗口：不直接关，转给界面按设置处理（询问 / 托盘 / 退出）。真要退出时放行。

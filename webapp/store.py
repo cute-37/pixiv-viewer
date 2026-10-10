@@ -32,6 +32,10 @@ SCHEMA = [
     CREATE TABLE IF NOT EXISTS folders (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, created REAL);
     CREATE TABLE IF NOT EXISTS folder_artists (folder_id INTEGER, artist TEXT, added REAL, PRIMARY KEY (folder_id, artist));
     """,
+    # 2：每位画师文件夹的扫描结果（文件清单）。下次启动时文件夹没变就直接用，不用把整个图库重新列一遍
+    """
+    CREATE TABLE IF NOT EXISTS scans (artist TEXT PRIMARY KEY, signature REAL, saved REAL, data BLOB);
+    """,
 ]
 
 
@@ -165,6 +169,34 @@ class WebStore:
         with self._lock:
             conn = self._conn()
             conn.executemany("INSERT OR REPLACE INTO dims VALUES (?, ?, ?, ?, ?)", rows)
+            conn.commit()
+
+    # ---------- 文件夹扫描结果 ----------
+    def load_scans(self) -> Dict[str, Tuple[float, bytes]]:
+        """全部存下来的扫描结果：{画师文件夹: (文件夹签名, 压缩过的文件清单)}"""
+        with self._lock:
+            return {a: (sig, data) for a, sig, data in self._conn().execute("SELECT artist, signature, data FROM scans")}
+
+    def save_scan(self, artist: str, signature: float, data: bytes) -> None:
+        with self._lock:
+            conn = self._conn()
+            conn.execute("INSERT OR REPLACE INTO scans VALUES (?, ?, ?, ?)", (artist, signature, time.time(), data))
+            conn.commit()
+
+    def prune_scans(self, keep: Iterable[str]) -> int:
+        """删掉已经不存在的画师文件夹的记录，返回删了几条"""
+        keep = set(keep)
+        with self._lock:
+            conn = self._conn()
+            gone = [(a,) for (a,) in conn.execute("SELECT artist FROM scans") if a not in keep]
+            conn.executemany("DELETE FROM scans WHERE artist = ?", gone)
+            conn.commit()
+        return len(gone)
+
+    def clear_scans(self) -> None:
+        with self._lock:
+            conn = self._conn()
+            conn.execute("DELETE FROM scans")
             conn.commit()
 
     # ---------- 界面设置 ----------

@@ -4,6 +4,7 @@ import { normalize, applySettings } from "./settings.js";
 import { connect } from "./api.js";
 import { initDownloader } from "./downloader.js";
 import { initWindowControls } from "./winctl.js";
+import { setLang } from "./i18n.js";
 
 async function boot() {
   // 图标都画在查看器主页面里的一张图标表上，这里直接取来用，不另存一份
@@ -12,6 +13,7 @@ async function boot() {
   initToast();
   const api = await connect();
   const S = normalize(await api.getConfig());
+  await setLang(new URLSearchParams(location.search).get("lang") || S.lang || "zh");
   applySettings(S);
   const ctx = { api, S, standalone: true, view: {}, closeDialog() {}, reloadLibrary: async () => {}, loadWorks() {},
     setSetting(patch) { Object.assign(S, patch); api.saveConfig(S); } };

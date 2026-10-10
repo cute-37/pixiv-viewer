@@ -9,6 +9,8 @@ import { initDialogs } from "./dialogs.js";
 import { initHover } from "./hover.js";
 import { initDownloader } from "./downloader.js";
 import { initWindowControls } from "./winctl.js";
+import { initNotices } from "./notices.js";
+import { setLang } from "./i18n.js";
 import { ctx, view } from "./state.js";
 import { ensureTile, loadWorks, refreshSelection, runAction, selectedKeys, setStars, tileEls } from "./grid.js";
 import { persist, syncChrome } from "./prefs.js";
@@ -132,12 +134,52 @@ window.addEventListener("resize", debounce(renderTagRow, 100));
 if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => { if (ctx.S.mode === "system") withThemeFade(ctx.S, () => { applySettings(ctx.S); syncChrome(); }); });
 
 // ================= 启动 =================
+/** 第一次打开：先问用哪种语言。两种语言都直接写在这个窗口上，不依赖翻译。 */
+function askLanguage(ctx) {
+  return new Promise((resolve) => {
+    const nav = (navigator.language || "").toLowerCase();
+    const guess = nav.startsWith("zh") ? "zh" : nav.startsWith("ja") ? "ja" : "en";
+    const box = document.createElement("div");
+    box.className = "closeask lang-ask";
+    box.dataset.nt = "1";
+    box.innerHTML = `<div class="closeask-card" role="dialog" aria-label="Language / 语言">
+      <h3>选择语言 · Language · 言語</h3>
+      <p>之后可以在“设置 → 外观”里改。<br>You can change this later under Settings → Appearance.<br>あとで「設定 → 外観」から変更できます。</p>
+      <div class="lang-choices">${[["zh", "中文", "简体中文界面"], ["en", "English", "English interface"], ["ja", "日本語", "日本語の画面"]].map(([v, l, d]) =>
+        `<button class="btn ${v === guess ? "primary" : ""}" data-pick-lang="${v}"><b>${l}</b><small>${d}</small></button>`).join("")}</div></div>`;
+    box.addEventListener("click", async (e) => {
+      const b = e.target.closest("[data-pick-lang]"); if (!b) return;
+      ctx.S.lang = b.dataset.pickLang;
+      await ctx.api.saveConfig(ctx.S);
+      await setLang(ctx.S.lang);
+      box.remove();
+      resolve();
+    });
+    document.body.append(box);
+    box.querySelector(".btn.primary").focus();
+  });
+}
+
 async function boot() {
   initToast();
   ctx.api = await connect();
   if (ctx.api.isMock) loadPreviewFonts();
-  ctx.S = normalize(await ctx.api.getConfig());
+  const saved = await ctx.api.getConfig();
+  ctx.S = normalize(saved);
+  // 还没有存过任何设置：第一次打开（浏览器预览版每次都是“没存过”，所以那边要在地址里写 ?firstrun 才算）
+  ctx.firstRun = ctx.api.isMock ? new URLSearchParams(location.search).has("firstrun") : (!saved || !Object.keys(saved).length);
+  // 语言：地址里的 ?lang= 只给预览和测试用；老用户（已经有设置但没选过语言）保持中文
+  await setLang(new URLSearchParams(location.search).get("lang") || ctx.S.lang || "zh");
   applySettings(ctx.S);
+  // 换语言：存好设置后整页重新载入（文字是在显示时翻译的，重新载入最干净）
+  ctx.chooseLang = async (code) => {
+    ctx.S.lang = code;
+    await ctx.api.saveConfig(ctx.S);
+    const url = new URL(location.href);
+    url.searchParams.delete("lang");
+    location.replace(url);
+  };
+  if (ctx.firstRun && !ctx.S.lang && !new URLSearchParams(location.search).get("lang")) await askLanguage(ctx);
   ctx.lib = await ctx.api.getLibrary();
   initViewer(ctx);
   initDialogs(ctx);
@@ -160,7 +202,10 @@ async function boot() {
     await reloadLibrary();
     if (done || !view.works.length) loadWorks();
   };
+  // 托盘右键菜单里点“下载与更新…”“设置…”时，后端把窗口叫出来之后调用它
+  window.__pvOpen = (what) => { if (what === "settings") ctx.openSettings(); else if (ctx.openDownloader) ctx.openDownloader(); };
   announceUpdate(ctx.api, ctx.lib.version);
+  initNotices(ctx);
   if (ctx.api.isMock && ctx.lib.demo) {
     let shown = false;
     try { shown = !!sessionStorage.getItem("pv-demo-hint"); sessionStorage.setItem("pv-demo-hint", "1"); } catch (e) { /* 浏览器不允许存储时忽略 */ }

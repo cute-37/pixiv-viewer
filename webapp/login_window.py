@@ -22,6 +22,8 @@ import threading
 from typing import Optional
 from urllib.parse import parse_qs, urlsplit
 
+from utils.lang import pick
+
 CALLBACK_MARK = "/auth/pixiv/callback"
 
 WAITING_HTML = """<!doctype html><meta charset="utf-8">
@@ -108,7 +110,7 @@ class LoginMixin:
                      "wanted_name": str(name or "").strip(), "window": None, "navigated": False}
             self._login = login
         try:
-            window = webview.create_window("登录 Pixiv", html=WAITING_HTML, width=520, height=780, min_size=(420, 560),
+            window = webview.create_window(pick("登录 Pixiv", "Sign in to Pixiv", "Pixiv にログイン"), html=WAITING_HTML, width=520, height=780, min_size=(420, 560),
                                            background_color="#FFFFFF", text_select=True)
         except Exception as error:
             login["status"], login["message"] = "error", f"登录窗口打不开：{error}"

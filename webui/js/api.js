@@ -29,7 +29,7 @@ function unpackWorks(res) {
       key: key === 0 ? String(pid) : key, pid, title: title || p0.file.replace(/\.[^.]*$/, ""),
       artistKey: a.key, artistName: a.name, artistId: a.id,
       w: p0.w, h: p0.h, ar: p0.w && p0.h ? Math.round((p0.w / p0.h) * 1e4) / 1e4 : res.defaultAr,
-      posted, mtime, month, rating, ai: !!(flags & 1), fav: !!(flags & 2), stars, pages: pg,
+      posted, mtime, month, rating, ai: !!(flags & 1), fav: !!(flags & 2), anim: !!(flags & 4), stars, pages: pg,
     };
   });
   delete res.artists;
@@ -59,7 +59,7 @@ function desktopApi() {
       return lib;
     },
     // Pixiv 下载器（独立进程，经由后端转发）
-    dl: call("dl"), dlInfo: call("dl_info"), dlSetHome: call("dl_set_home"), dlMigrate: call("dl_migrate"), dlRefreshLibrary: call("dl_refresh_library"), libraryReconnect: call("library_reconnect"),
+    dl: call("dl"), dlInfo: call("dl_info"), dlSetHome: call("dl_set_home"), dlMigrate: call("dl_migrate"), dlRefreshLibrary: call("dl_refresh_library"), libraryReconnect: call("library_reconnect"), libraryRescan: call("library_rescan"),
     dlStorageLink: call("dl_storage_link"), dlLinkLibrary: call("dl_link_library"), openHome: call("open_home"),
     importPick: call("import_pick"), importApply: call("import_apply"),
     listWorks: async (q) => unpackWorks(await http("list_works")({ ...q, packed: 1 })),
@@ -87,7 +87,7 @@ function desktopApi() {
     // 缩略图走单独的端口，不和数据接口、大图抢浏览器的并发连接
     thumbSrc: (src) => (src.includes("/thumb?") ? src : `${window.__PV_THUMB__ || ""}/thumb?t=${token}&path=${encodeURIComponent(src)}`),
     windowAction: call("window_action"),
-    clearCache: call("clear_cache"), saveText: call("save_text"),
+    clearCache: call("clear_cache"), saveText: call("save_text"), exportDiagnostics: call("export_diagnostics"), notices: call("notices"), mcpInfo: call("mcp_info"), backupInfo: call("backup_info"), backupNow: call("backup_now"), backupOpenFolder: call("backup_open_folder"),
     // 任务结束后：系统通知、完成后睡眠 / 关机 / 退出 / 运行命令（见 webapp/afterjob.py）
     jobWatch: call("job_watch"), afterJobSet: call("after_job_set"), afterJobState: call("after_job_state"), afterJobCancel: call("after_job_cancel"),
     // 在软件里弹出窗口登录 Pixiv（见 webapp/login_window.py）

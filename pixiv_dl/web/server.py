@@ -488,6 +488,20 @@ def api_pending_summary(r):
     return data
 
 
+@route("POST", r"/api/dev/apicheck")
+def api_dev_apicheck(r):
+    """开发者用：Pixiv 接口体检。每个接口只读地问一次，对照我们依赖的字段检查（见 pixiv_dl/apicheck.py）。"""
+    from pixiv_dl import apicheck
+    if r.app.runner.running:
+        raise HttpError(409, "任务运行中，结束后再体检")
+    pro = r.app.pro
+    pro.ensure_clients()
+    client = pro.get_main_client() or pro.get_any_client()
+    if client is None:
+        raise HttpError(400, "还没有可用的账号")
+    return apicheck.run(client, r.app.db, pro.session)
+
+
 @route("POST", r"/api/avatars/check")
 def api_avatars_check(r):
     """核对头像：头像文件夹里实际有哪些、还缺谁的，并把数据库里的记录改成和实际一致。不访问 Pixiv。"""

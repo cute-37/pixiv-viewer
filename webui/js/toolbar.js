@@ -197,6 +197,7 @@ function renderFilterPop() {
     <div class="frow"><span>方向</span>${seg("orientation", [["", "不限"], ["portrait", "竖图"], ["landscape", "横图"], ["square", "方图"]])}</div>
     <div class="frow"><span>AI 作品</span>${seg("ai", [["", "包含"], ["exclude", "排除"], ["only", "只看 AI"]])}</div>
     <div class="frow"><span>我的评分</span>${seg("minStars", [["", "不限"], ["3", "★3 以上"], ["4", "★4 以上"], ["5", "★5"]])}</div>
+    <div class="frow"><span>动图</span>${seg("anim", [["", "包含"], ["exclude", "排除"], ["only", "只看动图"]])}</div>
     <div class="frow"><span>多页作品</span>${seg("multiPage", [["", "不限"], ["1", "只看多页"]])}</div>
     <div class="pop-foot"><span>筛选只影响当前列表</span><span class="sp"></span><button class="linkbtn" id="f-clear">清除筛选</button></div>`;
 }

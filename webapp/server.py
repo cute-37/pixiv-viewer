@@ -185,8 +185,25 @@ class MediaServer:
             return self._send_file(req, path)
         return self._send_static(req, url.path)
 
+    def handle_mcp(self, req: BaseHTTPRequestHandler) -> None:
+        """AI 助手的工具调用（由 webapp/mcp_server.py 转过来）。口令不对一律拒绝；能做什么由 McpTools 按设置里的级别把关。"""
+        tools = getattr(self.api, "_mcp", None)
+        token = getattr(self.api, "_mcp_token", "")
+        if tools is None or not token or req.headers.get("X-PV-MCP") != token:
+            return req.send_error(403)
+        length = int(req.headers.get("Content-Length") or 0)
+        try:
+            args = json.loads(req.rfile.read(length) or b"{}") if length else {}
+        except ValueError:
+            return req.send_error(400)
+        name = urlparse(req.path).path[len("/mcp/"):]
+        data = json.dumps(tools.call(name, args), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self._send(req, data, "application/json; charset=utf-8")
+
     def handle_api(self, req: BaseHTTPRequestHandler) -> None:
         url = urlparse(req.path)
+        if url.path.startswith("/mcp/"):
+            return self.handle_mcp(req)
         name = url.path[len("/api/"):] if url.path.startswith("/api/") else ""
         if req.headers.get("X-PV-Token") != self.token:
             return req.send_error(403)

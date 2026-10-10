@@ -817,3 +817,40 @@ def test_avatar_check_can_look_without_changing_records(cfg, no_sleep):
     r = pro.check_avatars(fix=False)
     assert r['missing'] == 2 and r['fixed'] == 0
     assert db.conn.execute("SELECT COUNT(*) FROM artists WHERE profile_image_local != ''").fetchone()[0] == 3   # 记录没动
+
+
+# ================================================================ 接口体检（开发者用）
+def test_api_check_reports_missing_and_changed_fields():
+    from pixiv_dl import apicheck
+    good = {"illusts": [{"id": 1, "title": "t", "type": "illust", "create_date": "2026-01-01", "page_count": 1, "tags": [{"name": "a"}],
+                         "x_restrict": 0, "sanity_level": 2, "total_bookmarks": 1, "total_view": 2, "width": 10, "height": 20,
+                         "image_urls": {}, "meta_single_page": {}, "meta_pages": [], "user": {"id": 5}, "illust_ai_type": 0, "caption": ""}],
+            "next_url": None}
+    assert apicheck.check_fields("user_illusts", good) == []
+    import copy
+    broken = copy.deepcopy(good)
+    del broken["illusts"][0]["meta_pages"]                               # 字段没了
+    broken["illusts"][0]["page_count"] = "3"                             # 类型变了
+    broken["illusts"][0]["tags"] = [{"label": "a"}]                      # 里层的字段改名了
+    problems = apicheck.check_fields("user_illusts", broken)
+    assert any("没有 illusts[].meta_pages" in p for p in problems) and any("illusts[].page_count 的类型变了" in p for p in problems)
+    assert any("没有 illusts[].tags[].name" in p for p in problems) and len(problems) == 3
+    assert apicheck.check_fields("user_illusts", {"illusts": [], "next_url": None}) == []      # 列表是空的：这次查不了，不算问题
+    assert apicheck.check_fields("user_illusts", {"data": []}) != []
+
+
+def test_api_check_runs_every_endpoint_read_only(cfg, no_sleep):
+    """体检：每个接口问一次，不下载、不写数据库；数据库里没有例子的项目标成“跳过”"""
+    from pixiv_dl import apicheck
+    api = api_with({10: ('Alice', [105])})
+    pro, _ = make_processor(api, routes_for(api))
+    client = pro.clients['main']
+    db = Database.local(cfg.DB_PATH)
+    before = db.conn.execute("SELECT COUNT(*) FROM illusts").fetchone()[0]
+    report = apicheck.run(client, db, pro.session)
+    by = {i["name"]: i for i in report["items"]}
+    assert set(by) == {"user_following", "user_detail", "user_illusts", "illust_detail", "ugoira_metadata", "user_novels", "webview_novel", "image"}
+    assert by["ugoira_metadata"]["status"] == "skipped" and by["webview_novel"]["status"] == "skipped"
+    assert all(i["status"] in ("ok", "changed", "skipped", "error") for i in report["items"])
+    assert [c[0] for c in api.calls] == ["user_following", "user_detail", "user_illusts", "illust_detail"]   # 各一次
+    assert db.conn.execute("SELECT COUNT(*) FROM illusts").fetchone()[0] == before

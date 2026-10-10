@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -31,6 +32,9 @@ SCAN_TTL = 120.0          # 文件夹扫描结果的有效期（秒）
 ARTISTS_TTL = 30.0        # 画师列表（根目录下的子文件夹）的有效期（秒）
 RECHECK_SECS = 60.0       # 这段时间内不重复检查文件夹修改时间（网络盘上 500 个文件夹要将近 1 秒）
 MAX_FILES_PER_FOLDER = 20000
+# 打开一位画师时，最多当场读这么多张新图片的宽高；再多就先显示，剩下的在后台补（见 fill_dims）。
+# 正在下载的画师可能一下子多出几千张，网络盘又被下载占着，全读完要等很久。
+MAX_SYNC_DIMS = 60
 DEFAULT_AR = 0.75
 
 
@@ -74,6 +78,11 @@ class _FolderScan:
     scanned_at: float
     works: List[Work]
     checked_at: float = 0.0
+    dirs: List[str] = field(default_factory=list)     # 扫描时走过的所有文件夹（含子文件夹）：签名就是它们的修改时间之和
+
+
+SCAN_FORMAT = 1           # 存下来的扫描结果的格式；改了格式就加一，旧的自动作废
+DIR_MTIME_TTL = 120.0     # 列根目录时顺带拿到的子文件夹修改时间，这段时间内直接用，不再逐个去问
 
 
 def parse_artist(folder: str) -> Tuple[str, Optional[int]]:
@@ -113,6 +122,11 @@ class LibraryIndex:
         self.author_names: Callable[[], Dict[int, str]] = dict
         # 画师列表缓存：根目录在网络盘上时每次 scandir 都很慢，界面刷新又很频繁
         self._artists: Optional[Tuple[float, Tuple[str, ...], List[Artist]]] = None
+        # 上次运行存下来的扫描结果（第一次用到时从数据库读进来），和列根目录时顺带拿到的文件夹修改时间
+        self._saved: Optional[Dict[str, Tuple[float, bytes]]] = None
+        self._dir_mtimes: Dict[str, Tuple[float, float]] = {}
+        self.restored = 0     # 这次运行有多少位画师直接用了存下来的结果（没有重新列文件夹）
+        self.rescanned = 0    # 有多少位重新列了文件夹
 
     # ================= 根目录与画师 =================
     def roots(self) -> List[str]:
@@ -145,6 +159,7 @@ class LibraryIndex:
                     if entry.is_dir(follow_symlinks=False):
                         name, aid = parse_artist(entry.path)
                         result.append(Artist(os.path.normpath(entry.path), name, aid, root))
+                        self._note_mtime(entry)
                     elif not has_loose and is_image(entry.name):
                         has_loose = True
                 except OSError:
@@ -152,6 +167,19 @@ class LibraryIndex:
             if has_loose:
                 result.append(Artist(root, os.path.basename(root.rstrip("\\/")) or root, None, root, loose=True))
         return self._merge_same_artist(result)
+
+    def _note_mtime(self, entry) -> None:
+        """列目录时顺带记下子文件夹的修改时间，算签名时就不用再为每个文件夹单独问一次。
+
+        只对网络盘这样做（那里逐个问很慢，500 个文件夹要一秒左右）。本地 NTFS 列目录时给的时间可能是旧的，
+        逐个问又很快，所以本地盘一律现问。
+        """
+        if not is_network_path(entry.path):
+            return
+        try:
+            self._dir_mtimes[os.path.normpath(entry.path)] = (entry.stat().st_mtime, time.monotonic())
+        except OSError:
+            pass
 
     def _guess_artist_id(self, folder: str) -> Optional[int]:
         """文件夹名里没有画师 ID 时（例如名字以句号结尾，在 Windows 上显示成乱码短名），
@@ -204,15 +232,58 @@ class LibraryIndex:
         return None
 
     # ================= 扫描 =================
-    def _signature(self, artist: Artist) -> float:
-        """这位画师所有文件夹的修改时间之和：任何一个有增删都会变"""
+    def _signature(self, artist: Artist, dirs: Optional[List[str]] = None) -> float:
+        """这位画师所有文件夹（含子文件夹）的修改时间之和：任何一个里面有增删都会变"""
         total = 0.0
-        for folder in artist.folders:
+        now = time.monotonic()
+        for folder in (dirs or artist.folders):
+            known = self._dir_mtimes.get(folder)
+            if known and now - known[1] < DIR_MTIME_TTL:
+                total += known[0]
+                continue
             try:
                 total += os.stat(folder).st_mtime
             except OSError:
                 total -= 1.0
         return total
+
+    # ---- 扫描结果存盘：下次启动时文件夹没变就直接用
+    def _restore(self, artist: Artist) -> Optional[_FolderScan]:
+        """读出上次存下来的这位画师的扫描结果（还没有核对文件夹有没有变）。没有或读不了返回 None。"""
+        with self._lock:
+            if self._saved is None:
+                try:
+                    self._saved = self.store.load_scans()
+                except Exception as e:
+                    logger.warning(f"读取上次的扫描结果失败，这次全部重新扫描: {e}")
+                    self._saved = {}
+            row = self._saved.pop(artist.key, None)
+        if not row:
+            return None
+        try:
+            data = json.loads(zlib.decompress(row[1]).decode("utf-8"))
+            if data.get("v") != SCAN_FORMAT or data.get("folders") != artist.folders:
+                return None                     # 格式变了，或者这位画师名下的文件夹变了（合并进来了别的文件夹）
+            pages = [Page(p, f, m, s, 0, w, h) for p, f, m, s, w, h in data["pages"]]
+        except Exception:
+            return None
+        # 存的时候还没读到宽高的，看看之后有没有补上
+        blank = [p for p in pages if not p.w]
+        if blank:
+            known = self.store.get_dims([(p.path, p.mtime, p.size) for p in blank])
+            for p in blank:
+                if p.path in known:
+                    p.w, p.h = known[p.path]
+        return _FolderScan(row[0], 0.0, self._group(artist, pages), 0.0, list(data["dirs"]))
+
+    def _persist(self, artist: Artist, scan: _FolderScan) -> None:
+        try:
+            pages = [[p.path, p.file, p.mtime, p.size, p.w, p.h] for w in scan.works for p in w.pages]
+            blob = zlib.compress(json.dumps({"v": SCAN_FORMAT, "folders": artist.folders, "dirs": scan.dirs, "pages": pages},
+                                            ensure_ascii=False, separators=(",", ":")).encode("utf-8"), 3)
+            self.store.save_scan(artist.key, scan.signature, blob)
+        except Exception as e:
+            logger.debug(f"保存 {artist.key} 的扫描结果失败: {e}")
 
     def forget_artists(self) -> None:
         """丢掉画师列表缓存（文件夹可能有增减），已扫描的作品保留"""
@@ -227,17 +298,30 @@ class LibraryIndex:
         now = time.time()
         if cached and not force and not recheck and now - cached.checked_at < RECHECK_SECS:
             return cached.works
-        # 文件夹修改时间没变就继续用缓存，不因为“过了几分钟”而把整个资料库重扫一遍
-        sig = self._signature(artist)
-        if cached and not force and cached.signature == sig:
+        restored = None
+        if cached is None and not force:
+            restored = cached = self._restore(artist)        # 上次运行存下来的
+        # 文件夹修改时间没变就继续用缓存，不因为“过了几分钟”或者重启了一次而把整个资料库重扫一遍
+        if cached and not force and cached.signature == self._signature(artist, cached.dirs):
             cached.checked_at = now
+            if restored is not None:
+                with self._lock:
+                    self._scans[artist.key] = cached
+                    for w in cached.works:
+                        self._register(w)
+                    self.version += 1
+                    self.restored += 1
             return cached.works
-        works = self._scan_folder(artist, read_dims)
+        dirs: List[str] = []
+        works = self._scan_folder(artist, read_dims, dirs)
+        scan = _FolderScan(self._signature(artist, dirs), time.time(), works, time.time(), dirs)
         with self._lock:
-            self._scans[artist.key] = _FolderScan(sig, time.time(), works, time.time())
+            self._scans[artist.key] = scan
             for w in works:
                 self._register(w)
             self.version += 1
+            self.rescanned += 1
+        self._persist(artist, scan)
         return works
 
     def _register(self, w: Work) -> None:
@@ -264,8 +348,11 @@ class LibraryIndex:
             scan = self._scans.get(artist_key)
             return scan.works if scan else None
 
-    def _iter_files(self, artist: Artist):
+    def _iter_files(self, artist: Artist, visited: Optional[List[str]] = None):
+        """visited：把走过的文件夹记在这里（算签名用）"""
+        visited = visited if visited is not None else []
         if artist.loose:
+            visited.append(artist.key)
             try:
                 for e in os.scandir(artist.key):
                     if e.is_file() and is_image(e.name):
@@ -278,6 +365,7 @@ class LibraryIndex:
         count = 0
         while stack:
             folder = stack.pop()
+            visited.append(os.path.normpath(folder))
             try:
                 entries = list(os.scandir(folder))
             except OSError:
@@ -286,6 +374,7 @@ class LibraryIndex:
                 try:
                     if e.is_dir(follow_symlinks=False):
                         stack.append(e.path)
+                        self._note_mtime(e)
                     elif is_image(e.name):
                         count += 1
                         if count > MAX_FILES_PER_FOLDER:
@@ -295,9 +384,9 @@ class LibraryIndex:
                 except OSError:
                     continue
 
-    def _scan_folder(self, artist: Artist, read_missing: bool = True) -> List[Work]:
+    def _scan_folder(self, artist: Artist, read_missing: bool = True, visited: Optional[List[str]] = None) -> List[Work]:
         pages: List[Page] = []
-        for e in self._iter_files(artist):
+        for e in self._iter_files(artist, visited):
             try:
                 st = e.stat()
             except OSError:
@@ -310,11 +399,20 @@ class LibraryIndex:
         for p in pages:
             if p.path in known:
                 p.w, p.h = known[p.path]
-            elif read_missing:
+            elif read_missing and len(new_rows) < MAX_SYNC_DIMS:
                 p.w, p.h = read_dims(p.path)
                 new_rows.append((p.path, p.mtime, p.size, p.w, p.h))
         self.store.set_dims(new_rows)
-        # 分组为作品
+        return self._group(artist, pages)
+
+    def has_pending_dims(self) -> bool:
+        """有没有还没读到宽高的图片（扫描时先跳过的那些）"""
+        with self._lock:
+            return any(not p.w for scan in self._scans.values() for w in scan.works for p in w.pages)
+
+    @staticmethod
+    def _group(artist: Artist, pages: List[Page]) -> List[Work]:
+        """把一位画师的图片按作品分组（同一个作品的 p0、p1… 合在一起）"""
         works: Dict[str, Work] = {}
         for p in pages:
             m = PIXIV_RE.search(p.file)
@@ -338,6 +436,7 @@ class LibraryIndex:
         """给扫描时跳过的图片补上宽高（直接写回缓存的作品对象），返回补了多少张"""
         with self._lock:
             pending = [p for scan in self._scans.values() for w in scan.works for p in w.pages if not p.w]
+            touched = [(key, scan) for key, scan in self._scans.items() if any(not p.w for w in scan.works for p in w.pages)]
         rows, done = [], 0
         for p in pending:
             if should_stop():
@@ -351,6 +450,10 @@ class LibraryIndex:
         self.store.set_dims(rows)
         if done or rows:
             self.version += 1
+            by_key = {a.key: a for a in self.artists()}
+            for key, scan in touched:               # 存盘的那份也带上宽高，下次启动不用再补
+                if key in by_key:
+                    self._persist(by_key[key], scan)
         return done + len(rows)
 
     def all_works(self, scan: bool = True) -> List[Work]:
@@ -370,6 +473,20 @@ class LibraryIndex:
             self._works.clear()
             self._artists = None
             self.version += 1
+
+    def forget_saved(self) -> None:
+        """丢掉存盘的扫描结果：下一次扫描把每个文件夹都重新列一遍（“重新扫描全部”用）"""
+        with self._lock:
+            self._saved = {}
+            self._dir_mtimes.clear()
+        self.store.clear_scans()
+
+    def prune_saved(self) -> None:
+        """清掉已经不存在的画师文件夹的存盘记录"""
+        try:
+            self.store.prune_scans(a.key for a in self.artists())
+        except Exception as e:
+            logger.debug(f"清理扫描记录失败: {e}")
 
     # ================= Pixiv 元数据 =================
     def _ensure_meta_source(self) -> None:
@@ -411,6 +528,8 @@ class LibraryIndex:
             "tags": [str(t) for t in (meta.get("tags") or []) if str(t).strip()],
             "rating": {"r18": "r18", "r18g": "r18g"}.get(level, "safe"),
             "ai": bool(self.reader.is_ai_from_meta(meta)),
+            # 动图（Pixiv 的 ugoira）：作品类型是 2。封面是静止的，界面要靠这个标出来
+            "anim": str(meta.get("illust_type")) in ("2", "ugoira"),
             "posted": posted,
             "caption": caption,
             "author_id": meta.get("author_id"),

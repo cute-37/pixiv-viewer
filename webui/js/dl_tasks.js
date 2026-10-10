@@ -44,7 +44,7 @@ export function createTasks(D) {
   function pageUpdate() {
     const job = state.job || {}, plan = state.plan || {};
     const showResult = !running() && job.kind && job.kind !== "idle" && state.dismissed !== job.id;
-    let html = (state.notes || []).map((n) => `<div class="dl-note lv-${n.level}">${icon(n.level === "info" ? "info" : "warn")}<div><b>${esc(n.title)}</b>${n.detail ? `<small>${esc(n.detail)}</small>` : ""}</div>
+    let html = (ctx.noticeBanner ? ctx.noticeBanner() : "") + (state.notes || []).map((n) => `<div class="dl-note lv-${n.level}">${icon(n.level === "info" ? "info" : "warn")}<div><b>${esc(n.title)}</b>${n.detail ? `<small>${esc(n.detail)}</small>` : ""}</div>
       ${n.action ? `<button class="btn" data-dlgo="${n.action.route.includes("accounts") ? "accounts" : n.action.route.includes("tasks") ? "failed" : "update"}">${esc(n.action.label)}</button>` : ""}</div>`).join("");
     if (running()) html += runningCard(job);
     else if (state.review) html += reviewCard();

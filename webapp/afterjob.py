@@ -22,12 +22,17 @@ import threading
 import time
 from typing import Optional
 
+from utils.lang import pick
 from utils.logger import get_logger
 
 logger = get_logger("AfterJob")
 
 ACTIONS = {"none": "什么都不做", "sleep": "让电脑睡眠", "hibernate": "让电脑休眠", "shutdown": "关机",
            "exit": "退出软件", "command": "运行命令"}
+ACTIONS_EN = {"none": "do nothing", "sleep": "sleep", "hibernate": "hibernate", "shutdown": "shut down",
+              "exit": "quit the app", "command": "run the command"}
+ACTIONS_JA = {"none": "何もしない", "sleep": "スリープ", "hibernate": "休止状態", "shutdown": "シャットダウン",
+              "exit": "アプリを終了", "command": "コマンドを実行"}
 COUNTDOWN = {"sleep": 60, "hibernate": 60, "shutdown": 60, "exit": 15, "command": 0}
 POLL_SECS = 2.0
 
@@ -60,26 +65,28 @@ def describe(job: dict) -> tuple:
     """把任务的结果写成通知的标题和内容"""
     status, result, kind = job.get("status"), job.get("result") or {}, str(job.get("kind") or "")
     if status == "error":
-        return "任务出错了", str(job.get("error") or "")[:120]
+        return pick("任务出错了", "The job failed", "タスクでエラーが発生しました"), str(job.get("error") or "")[:120]
     if status == "cancelled":
-        return "任务已停止", ""
+        return pick("任务已停止", "The job was stopped", "タスクを停止しました"), ""
     if result.get("needs_review"):
-        return "检查完成，等你确认", f"新发现 {result.get('new_files', 0)} 个文件，还没有开始下载"
+        n = result.get('new_files', 0)
+        return (pick("检查完成，等你确认", "Check finished, waiting for you", "確認が完了しました。操作をお待ちしています"),
+                pick(f"新发现 {n} 个文件，还没有开始下载", f"{n} new files found; nothing downloaded yet", f"新しいファイルが {n} 件見つかりました。まだダウンロードは始まっていません"))
     parts = []
     if kind == "download_avatars":
-        parts.append(f"下载了 {job.get('success', 0)} 个头像")
+        parts.append(pick(f"下载了 {job.get('success', 0)} 个头像", f"{job.get('success', 0)} avatars downloaded", f"アイコン {job.get('success', 0)} 個をダウンロード"))
     elif kind == "fill_sizes":
-        parts.append(f"补上了 {result.get('sizes', 0)} 个文件的大小")
+        parts.append(pick(f"补上了 {result.get('sizes', 0)} 个文件的大小", f"{result.get('sizes', 0)} file sizes filled in", f"{result.get('sizes', 0)} 件のファイルサイズを補完"))
     else:
         if "artists" in result:
-            parts.append(f"检查了 {result.get('artists_ok', 0)} 位画师")
+            parts.append(pick(f"检查了 {result.get('artists_ok', 0)} 位画师", f"{result.get('artists_ok', 0)} artists checked", f"作者 {result.get('artists_ok', 0)} 人を確認"))
         if "tasks" in result or not kind.startswith("sync"):
-            parts.append(f"下载 {job.get('success', 0)} 个文件")
+            parts.append(pick(f"下载 {job.get('success', 0)} 个文件", f"{job.get('success', 0)} files downloaded", f"{job.get('success', 0)} ファイルをダウンロード"))
     if job.get("failed"):
-        parts.append(f"失败 {job.get('failed')}")
+        parts.append(pick(f"失败 {job.get('failed')}", f"{job.get('failed')} failed", f"失敗 {job.get('failed')}"))
     if result.get("unchecked"):
-        parts.append(f"{result['unchecked']} 位没查到")
-    return "任务完成", "，".join(parts)
+        parts.append(pick(f"{result['unchecked']} 位没查到", f"{result['unchecked']} artists not reached", f"{result['unchecked']} 人は未確認"))
+    return pick("任务完成", "Job finished", "タスクが完了しました"), pick("，", ", ", "、").join(parts)
 
 
 class AfterJobMixin:
@@ -177,7 +184,9 @@ class AfterJobMixin:
         completed = job.get("status") == "done" and not (job.get("result") or {}).get("needs_review")
         if action == "none" or not completed:
             if action != "none":
-                text = (text + "。" if text else "") + f"任务没有正常做完，所以没有执行“完成后{ACTIONS[action]}”"
+                text = pick((text + "。" if text else "") + f"任务没有正常做完，所以没有执行“完成后{ACTIONS[action]}”",
+                            (text + ". " if text else "") + f"The job did not complete normally, so “{ACTIONS_EN[action]}” was not done",
+                            (text + "。" if text else "") + f"タスクが正常に完了しなかったため、「{ACTIONS_JA[action]}」は実行しませんでした")
                 watch["message"] = "任务没有正常做完，没有执行"
             watch["state"] = "idle"
             if watch["notify"] or action != "none":
@@ -187,7 +196,9 @@ class AfterJobMixin:
         watch["deadline"] = time.time() + seconds
         watch["state"] = "countdown"
         if seconds:
-            self._after_notify(title, f"{text}。{seconds} 秒后{ACTIONS[action]}，打开窗口可以取消")
+            self._after_notify(title, pick(f"{text}。{seconds} 秒后{ACTIONS[action]}，打开窗口可以取消",
+                                           f"{text}. Will {ACTIONS_EN[action]} in {seconds} s; open the window to cancel",
+                                           f"{text}。{seconds} 秒後に{ACTIONS_JA[action]}します。ウィンドウを開くとキャンセルできます"))
             tray = getattr(self, "_tray", None)
             if tray is not None and getattr(tray, "hidden", False):
                 tray.restore()                  # 把窗口叫出来，让“取消”看得到

@@ -310,3 +310,18 @@ def test_update_apply_really_quits_even_when_close_would_ask(install, monkeypatc
     timers[0]()
     assert api._quitting is True and Window.destroyed == 1
 
+
+def test_failure_message_follows_the_install_language(tmp_path):
+    """更新失败时系统弹出的那段话：按这份安装的界面语言来"""
+    import json
+    from webapp import updater
+    assert updater._install_lang(tmp_path) == "zh"                       # 没有设置文件：中文
+    (tmp_path / "data" / "config").mkdir(parents=True)
+    (tmp_path / "data" / "config" / "web_ui.json").write_text(json.dumps({"lang": "en"}), encoding="utf-8")
+    assert updater._install_lang(tmp_path) == "en"
+    text, title = updater._failure_text("旧版本一直没有退出", "zh")
+    assert title == "更新" and "原因：旧版本一直没有退出" in text
+    text, title = updater._failure_text("旧版本一直没有退出", "en")
+    assert title == "Update" and "Reason: the old version never exited" in text and "保持" not in text
+    text, _ = updater._failure_text("PixivViewer.exe 还在被占用，没法替换（拒绝访问）", "en")
+    assert "PixivViewer.exe is still in use and cannot be replaced" in text

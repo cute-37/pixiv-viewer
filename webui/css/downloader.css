@@ -42,6 +42,7 @@
 .dl-nums { display: flex; flex-wrap: wrap; gap: 4px calc(var(--gap) * 1.5); padding: var(--gap) calc(var(--gap) * 1.5); color: var(--text-2); font-variant-numeric: tabular-nums; }
 .dl-nums b { color: var(--text); font-weight: 700; }
 .dl-nums .bad, .bad { color: #e5484d; }
+.dl-note.notice .btn { flex: none; align-self: center; }
 .dl-hint.warn { display: flex; gap: 6px; align-items: flex-start; color: var(--text); }
 .dl-hint.warn svg { flex: none; margin-top: 2px; color: #d98a1f; }
 .dl-workers { display: grid; gap: 2px; padding: 0 calc(var(--gap) * 1.5) var(--gap); font-size: calc(var(--fs) - 1px); }

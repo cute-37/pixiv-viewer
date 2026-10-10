@@ -27,6 +27,10 @@ def main() -> int:
         # 更新：这是刚下载好的新版本，被旧版本启动来替换它的文件（见 webapp/updater.py）
         from webapp.updater import apply_main
         return apply_main(sys.argv[2:])
+    if len(sys.argv) >= 2 and sys.argv[1] == "--mcp":
+        # 给 AI 助手用的接口：只是个转发程序，真正干活的是已经在运行的那个窗口（见 webapp/mcp_server.py）
+        from webapp.mcp_server import main as mcp_main
+        return mcp_main()
     if len(sys.argv) >= 3 and sys.argv[1] == "--dl-worker":
         # 打包后的程序用自己充当下载功能的工作进程（见 webapp/downloader.py）
         from webapp.dl_worker import main as worker_main
@@ -63,6 +67,13 @@ def main() -> int:
     api = Api(cm, get_pixiv_reader(), db, token=token)
     server = MediaServer(token, api._allowed, api=api, avatar=api._avatar_path)
     server.start()
+    try:      # 写下“怎么连我”，AI 助手的转发程序靠它找到这个窗口；退出时删掉
+        from webapp.mcp_tools import write_runtime
+        write_runtime(DATA_DIR / "runtime.json", server.port, api._mcp_token)
+        import atexit
+        atexit.register(lambda: (DATA_DIR / "runtime.json").unlink(missing_ok=True))
+    except Exception as e:
+        logger.warning(f"没能写下 AI 助手接口的连接信息: {e}")
 
     # 登录 Pixiv 的窗口要和下载用同一个代理；内置浏览器的代理只能在开第一个窗口之前定下来
     from webapp.login_window import apply_browser_proxy
@@ -96,6 +107,8 @@ def main() -> int:
         # 缩略图缓存不会无限增长：每次启动在后台清一遍太旧的和超量的
         import threading
         threading.Thread(target=api._prune_cache, name="cache-prune", daemon=True).start()
+        # 评分、收藏这些只存在本机的数据，隔几天自动备份一份
+        threading.Thread(target=api._auto_backup, name="auto-backup", daemon=True).start()
 
     # 调试用：设置环境变量 PV_DEBUG_PORT=端口号 后，可以用浏览器开发者工具连接到界面
     if os.environ.get("PV_DEBUG_PORT", "").isdigit():

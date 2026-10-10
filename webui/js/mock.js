@@ -72,7 +72,8 @@ function pickTags(i) {
 
 const NOW = 1759450000;
 const WORKS = [];
-let offline = new URLSearchParams(location.search).has("offline");     // ?offline=1：图库所在的共享没连上
+const fresh = new URLSearchParams(location.search).has("fresh");         // ?fresh=1：第一次打开，什么都还没有
+let offline = fresh || new URLSearchParams(location.search).has("offline");     // ?offline=1：图库所在的共享没连上
 const COUNT = Math.min(20000, Math.max(30, +(new URLSearchParams(location.search).get("works")) || 150));
 for (let i = 0; i < COUNT; i++) {
   const a = ARTISTS[(i * 7) % ARTISTS.length], ar = ARS[i % ARS.length], r = rng(i * 977 + 5);
@@ -88,7 +89,7 @@ for (let i = 0; i < COUNT; i++) {
   WORKS.push({
     key: String(pid), pid, title: TITLES[i % TITLES.length], artistKey: a.key, artistName: a.name, artistId: a.id,
     pages, w, h, ar, posted, mtime: posted + 3600 * (i % 40), month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-    rating: i % 9 === 4 ? "r18" : "safe", ai: i % 13 === 6, tags: pickTags(i), myTags: i % 6 === 0 ? ["壁纸候选"] : [],
+    rating: i % 9 === 4 ? "r18" : "safe", ai: i % 13 === 6, anim: i % 11 === 3, tags: pickTags(i), myTags: i % 6 === 0 ? ["壁纸候选"] : [],
     fav: i % 7 === 2, stars: i % 5 === 1 ? 4 : i % 11 === 3 ? 5 : 0, caption: CAPTIONS[i % CAPTIONS.length], viewed: i < 20 ? NOW - i * 3000 : 0,
   });
 }
@@ -103,7 +104,7 @@ function thumbOf(p, ar) { return `mock:${p.seed}:${ar}`; }
 function publicWork(w) {
   return {
     key: w.key, pid: w.pid, title: w.title, artistKey: w.artistKey, artistName: w.artistName, artistId: w.artistId,
-    w: w.w, h: w.h, ar: w.ar, posted: w.posted, mtime: w.mtime, month: w.month, rating: w.rating, ai: w.ai,
+    w: w.w, h: w.h, ar: w.ar, posted: w.posted, mtime: w.mtime, month: w.month, rating: w.rating, ai: w.ai, anim: w.anim,
     tags: w.tags, fav: w.fav, stars: w.stars,
     pages: w.pages.map((p) => ({ path: p.path, file: p.file, w: p.w, h: p.h, size: p.size, thumb: thumbOf(p, w.ar) })),
   };
@@ -133,7 +134,7 @@ export const mock = {
     const counts = new Map(), updated = new Map();
     for (const w of WORKS) { counts.set(w.artistKey, (counts.get(w.artistKey) || 0) + w.pages.length); updated.set(w.artistKey, Math.max(updated.get(w.artistKey) || 0, w.posted)); }
     return {
-      roots: offline ? [{ path: "\\\\NAS\\pixiv", name: "pixiv", count: 0, offline: true, error: "用户名或密码不正确。", auto: true }] : [{ path: "D:\\Pixiv", name: "Pixiv", count: WORKS.reduce((n, w) => n + w.pages.length, 0) }, { path: "\\\\NAS\\pixiv-archive", name: "pixiv-archive", count: 0, offline: true }],
+      roots: fresh ? [] : offline ? [{ path: "\\\\NAS\\pixiv", name: "pixiv", count: 0, offline: true, error: "用户名或密码不正确。", auto: true }] : [{ path: "D:\\Pixiv", name: "Pixiv", count: WORKS.reduce((n, w) => n + w.pages.length, 0) }, { path: "\\\\NAS\\pixiv-archive", name: "pixiv-archive", count: 0, offline: true }],
       artists: offline ? [] : ARTISTS.map((a) => ({ ...a, count: counts.get(a.key) || 0, updated: updated.get(a.key) || 0 })),
       totals: { images: WORKS.reduce((n, w) => n + w.pages.length, 0), works: WORKS.length, fav: WORKS.filter((w) => w.fav).length, recent: WORKS.filter((w) => w.viewed).length },
       metadata: { path: "D:\\Pixiv\\db\\pixiv.db", ok: true },
@@ -164,6 +165,8 @@ export const mock = {
         || String(w.artistId).includes(text) || w.tags.some((t) => t.toLowerCase().includes(text)))) return false;
       if (f.ai === "exclude" && w.ai) return false;
       if (f.ai === "only" && !w.ai) return false;
+      if (f.anim === "only" && !w.anim) return false;
+      if (f.anim === "exclude" && w.anim) return false;
       if (f.orientation === "portrait" && w.ar >= 1) return false;
       if (f.orientation === "landscape" && w.ar <= 1) return false;
       if (f.orientation === "square" && Math.abs(w.ar - 1) > 0.05) return false;
@@ -227,6 +230,19 @@ export const mock = {
   async openExternal() { return "preview"; },
   // 预览版里没有真的窗口。地址里带 ?desktop 时装作有（显示窗口按钮），用来演示和测试“关闭时询问”
   ...(new URLSearchParams(location.search).has("desktop") ? { async windowAction(action) { (window.__pvWindowActions = window.__pvWindowActions || []).push(action); if (action === "tray" || action === "close") window.__pvLastWindowAction = action; return false; } } : {}),
+  // 地址里带 ?notice=important 或 ?notice=download 时，装作有一条针对当前版本的重要更新提醒
+  async notices() {
+    const level = new URLSearchParams(location.search).get("notice");
+    if (!level || window.__noticesOff) return { ok: true, items: [] };
+    return { ok: true, items: [{ id: "demo", level, below: "9.0.0", title: { zh: "这个版本的下载功能已经不能用了", en: "Downloading no longer works in this version" },
+      text: { zh: "Pixiv 调整了接口，旧版本检查和下载都会失败。请更新到最新版本。", en: "Pixiv changed its API. Please update." } }] };
+  },
+  async mcpInfo() { return { command: "D:\\Pixiv Viewer\\PixivViewer.exe", args: ["--mcp"], cwd: "", level: (config && config.mcp) || "off",
+    tools: [{ name: "search_works", level: "read" }, { name: "get_image", level: "read" }, { name: "set_rating", level: "edit" }, { name: "plan_download", level: "full" }, { name: "start_download", level: "full" }] }; },
+  async backupInfo() { return { folder: "D:\\Pixiv Viewer\\data\\backups", everyDays: 7, keep: 6, items: window.__noBackups ? [] : [{ name: "PixivViewer-backup-20261005-091200.zip", path: "D:\\Pixiv Viewer\\data\\backups\\PixivViewer-backup-20261005-091200.zip", bytes: 48211, time: Date.now() / 1000 - 2 * 86400 }] }; },
+  async backupNow() { return { ok: true, path: "E:\\备份\\PixivViewer-backup.zip", bytes: 48211, counts: { favorites: 29, rated: 12 } }; },
+  async backupOpenFolder() { return true; },
+  async exportDiagnostics() { return { ok: true, path: "D:\\导出\\PixivViewer-诊断.zip", files: 6, bytes: 182000 }; },
   async saveText(name) { return "D:\\导出\\" + name; },
   async clearCache() { const freed = mockCacheSize; mockCacheSize = 0; return { removed: 4321, freed }; },
   // 任务结束后的动作：预览版里只演示倒计时，不会真的关机
@@ -387,6 +403,7 @@ function mockDownloader() {
     async dlStorageLink() { return { mode: settings.STORAGE_MODE, path: settings.STORAGE_MODE === "smb" ? `\\\\${settings.NAS_IP}\\${settings.NAS_SHARE}\\${settings.NAS_BASE_PATH.replace(/\//g, "\\")}` : settings.STORAGE_MODE === "local" ? settings.LOCAL_SAVE_PATH : "", readable: ["smb", "local"].includes(settings.STORAGE_MODE), inLibrary: ["smb", "local"].includes(settings.STORAGE_MODE), auto: true }; },
     async dlLinkLibrary() { linked = true; return { ok: true, ...(await this.dlStorageLink()) }; },
     async dlRefreshLibrary() { return { scanned: 0 }; },
+    async libraryRescan() { window.__rescans = (window.__rescans || 0) + 1; return { ok: true, indexing: false }; },
     async libraryReconnect() { offline = false; return { ok: true, indexing: false }; },
     async dl(method, path, body) {
       await wait(120);
@@ -395,6 +412,10 @@ function mockDownloader() {
       if (path === "/api/job" && method === "POST") { if (job.running) return err(409, "已有任务在运行，请先等待完成或点击「停止」"); run(body.kind, body); return ok({ ok: true }); }
       if (path === "/api/job/pause") { job.paused = true; job.message = "已暂停"; return ok({ ok: true, paused: true }); }
       if (path === "/api/job/resume") { job.paused = false; job.message = ""; return ok({ ok: true, resumed: true }); }
+      if (path === "/api/dev/apicheck") return ok({ ok: false, time: "2026-10-07 18:30:00", account: "main", library: "3.7.5", checked: 3, items: [
+        { name: "user_following", label: "关注列表", status: "ok", problems: [], note: "", ms: 320 },
+        { name: "user_illusts", label: "画师的作品列表", status: "changed", problems: ["没有 illusts[].meta_pages"], note: "", ms: 140 },
+        { name: "ugoira_metadata", label: "动图信息", status: "skipped", problems: [], note: "数据库里没有下载过的动图，这一项跳过", ms: 0 }] });
       if (path === "/api/avatars/check" && body.dry) return ok({ artists: ARTISTS.length, have: ARTISTS.length - 2, missing: 2, fixed: 0, items: ARTISTS.slice(0, 2).map((a) => ({ id: a.id, name: a.name })) });
       if (path === "/api/avatars/check") return ok({ artists: ARTISTS.length, have: ARTISTS.length - 2, missing: 2, fixed: 0, items: ARTISTS.slice(0, 2).map((a) => ({ id: a.id, name: a.name })) });
       if (path === "/api/pending/summary") {

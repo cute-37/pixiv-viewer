@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import webbrowser
@@ -23,7 +25,8 @@ from urllib.parse import quote
 from contextlib import closing
 from pathlib import Path
 
-from utils.constants import APP_VERSION, CACHE_DIR, DATA_DIR, UPDATE_REPO
+from utils.lang import set_lang
+from utils.constants import APP_VERSION, CACHE_DIR, DATA_DIR, LOG_DIR, UPDATE_REPO
 from utils.logger import get_logger
 
 from . import importer
@@ -31,6 +34,8 @@ from .downloader import DownloaderBridge, DownloaderData, DownloaderError, resol
 from .library import DEFAULT_AR, Artist, LibraryIndex, Work
 from .afterjob import AfterJobMixin
 from .login_window import LoginMixin
+from .mcp_tools import TOOLS as MCP_TOOLS, McpTools
+from .notices import NoticeApiMixin, Notices, notices_url
 from .store import WebStore
 from .tray import CloseMixin
 from .updater import UpdateApiMixin, Updater
@@ -65,7 +70,7 @@ def _pack(res: dict) -> dict:
         rows.append([
             0 if x["key"] == str(x["pid"]) else x["key"], x["pid"], "" if x["title"] == default_title else x["title"],
             ai, int(x["posted"] or 0), int(x["mtime"] or 0), x["month"], x["rating"],
-            (1 if x["ai"] else 0) | (2 if x["fav"] else 0), x["stars"], pages,
+            (1 if x["ai"] else 0) | (2 if x["fav"] else 0) | (4 if x.get("anim") else 0), x["stars"], pages,
         ])
     return {**res, "works": rows, "artists": artists, "packed": 1, "sep": os.sep, "defaultAr": DEFAULT_AR}
 
@@ -75,7 +80,7 @@ def _month(ts: float) -> str:
     return f"{d.year}-{d.month:02d}"
 
 
-class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
+class Api(UpdateApiMixin, NoticeApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
     def __init__(self, config_manager, reader, database, store: Optional[WebStore] = None, token: str = "") -> None:
         self._cm = config_manager
         self._reader = reader
@@ -85,6 +90,14 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
         self._window = None          # pywebview 窗口，由 web_main 设置
         self._updater = Updater("PixivViewer", APP_VERSION, UPDATE_REPO, proxies=self._download_proxies)
         self._update_done = self._updater.finish() if self._updater.frozen else None
+        set_lang((self._store.load_settings() or {}).get("lang"))
+        # 给 AI 助手用的接口（MCP）：默认是关的，在“设置 → 常规 → AI 助手”里打开；口令每次启动换一个
+        self._mcp_token = secrets.token_urlsafe(24)
+        self._mcp = McpTools(self, lambda: str((self._store.load_settings() or {}).get("mcp") or "off"))
+        # 重要更新提醒（旧版本有严重问题时告诉用户该更新了）：只读仓库里的一个小文件，可以在设置里关掉
+        self._notices = Notices(APP_VERSION, notices_url(UPDATE_REPO), DATA_DIR / "notices.json",
+                                fetch=lambda url: self._updater._get(url, headers={"Accept": "application/json"}).text,
+                                enabled=lambda: (self._store.load_settings() or {}).get("updateNotices") is not False)
         # 注意：pywebview 会把所有不以下划线开头的属性和方法暴露给网页，内部对象一律用私有名
         self._library = LibraryIndex(self._store, reader, lambda: self._library_roots())
         self._indexing = False
@@ -146,6 +159,7 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
     def save_config(self, data):
         if isinstance(data, dict):
             self._store.save_settings(data)
+            set_lang(data.get("lang"))          # 托盘菜单、系统通知这些原生显示的文字跟着换
         return True
 
     # ================= 资料库 =================
@@ -243,6 +257,16 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
         self._start_indexing(*self._index_callbacks)
         return {"ok": True, "indexing": True}
 
+    def library_rescan(self):
+        """把每个文件夹都重新列一遍（平时只重新列有变化的）。文件被原地替换、在别处改过子文件夹时用。"""
+        if self._indexing:
+            return {"ok": True, "indexing": True}
+        self._library.forget_saved()
+        self._library.invalidate()
+        self._list_cache.clear()
+        self._start_indexing(*self._index_callbacks)
+        return {"ok": True, "indexing": True}
+
     def _mount_network(self) -> None:
         """连接配置里启用的网络共享（SMB 等，凭据来自系统凭据库）；已连接时会直接复用"""
         self._connect_save_share()
@@ -284,7 +308,10 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
             finally:
                 self._indexing = False
                 self._store.close_thread_connection()
-                logger.info(f"资料库索引完成，用时 {time.time() - t0:.1f}s")
+                lib = self._library
+                logger.info(f"资料库索引完成，用时 {time.time() - t0:.1f}s"
+                            f"（{lib.restored} 位画师的文件夹没有变化，直接用了上次的结果；{lib.rescanned} 位重新扫描）")
+                lib.prune_saved()
                 if on_done:
                     on_done()
             # 扫描时跳过的图片宽高在空闲时慢慢补上（只影响齐行/瀑布流的比例，不阻塞浏览）
@@ -300,11 +327,35 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
         threading.Thread(target=run, name="library-index", daemon=True).start()
 
     # ================= 作品列表 =================
+    def _fill_dims_later(self) -> None:
+        """把扫描时先跳过的图片宽高在后台补上，补完通知界面。同一时间只跑一个；启动扫描期间不跑（那边结束后自己会补）。"""
+        if self._indexing or getattr(self, "_filling_dims", False) or not self._library.has_pending_dims():
+            return
+        self._filling_dims = True
+
+        def run():
+            try:
+                n = self._library.fill_dims()
+                if n:
+                    logger.info(f"已在后台补全 {n} 张图片的宽高")
+                    notify = self._index_callbacks[0]
+                    if notify:
+                        notify()
+            except Exception as e:
+                logger.warning(f"补全图片宽高失败: {e}")
+            finally:
+                self._filling_dims = False
+                self._store.close_thread_connection()
+
+        threading.Thread(target=run, name="fill-dims", daemon=True).start()
+
     def _scope_works(self, q: dict) -> List[Work]:
         scope = q.get("scope") or "all"
         if scope == "artist":
             a = self._library.artist_by_key(q.get("artist") or "")
-            return self._library.scan_artist(a) if a else []
+            works = self._library.scan_artist(a) if a else []
+            self._fill_dims_later()              # 新图片太多时宽高没有当场读完：先显示，剩下的在后台补
+            return works
         if scope == "folder":
             # 画师文件夹：里面所有画师的作品合在一起
             folder = next((f for f in self._store.folders() if str(f["id"]) == str(q.get("folder"))), None)
@@ -394,6 +445,12 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
                 continue
             if f.get("ai") == "only" and not m.get("ai"):
                 continue
+            # 动图：按作品信息判断；没有作品信息的，GIF 文件也算
+            anim = bool(m.get("anim")) or p0.file.lower().endswith(".gif")
+            if f.get("anim") == "only" and not anim:
+                continue
+            if f.get("anim") == "exclude" and anim:
+                continue
             ori = f.get("orientation")
             if ori == "portrait" and ar >= 1 or ori == "landscape" and ar <= 1 or ori == "square" and abs(ar - 1) > 0.05:
                 continue
@@ -405,7 +462,7 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
             out.append({
                 "key": w.key, "pid": w.pid, "title": title, "artistKey": w.artist_key, "artistName": artist_name,
                 "artistId": artist_id, "w": p0.w, "h": p0.h, "ar": round(ar, 4), "posted": posted, "mtime": w.mtime,
-                "month": _month(posted), "rating": r, "ai": bool(m.get("ai")), "tags": m.get("tags") or [],
+                "month": _month(posted), "rating": r, "ai": bool(m.get("ai")), "anim": anim, "tags": m.get("tags") or [],
                 "fav": w.key in favs, "stars": st,
                 # 缩略图地址由前端按 path 拼出（见 webui/js/api.js），不在这里重复上万次
                 "pages": [{"path": p.path, "file": p.file, "w": p.w, "h": p.h, "size": p.size} for p in w.pages],
@@ -741,6 +798,107 @@ class Api(UpdateApiMixin, LoginMixin, CloseMixin, AfterJobMixin):
         return {"scanned": len(targets)}
 
     # ================= 窗口（无边框窗口的标题栏按钮） =================
+    # ---- 备份只存在本机的数据（评分、标签、收藏、置顶、画师文件夹、界面设置）
+    def _backup_paths(self) -> tuple:
+        return self._store.db_path, self._db.db_path, self._store.settings_path
+
+    def _auto_backup(self) -> None:
+        """启动时在后台调用：到时间了就自动备份一份（可以在设置里关掉）"""
+        from webapp import backup
+        try:
+            if (self._store.load_settings() or {}).get("autoBackup") is False:
+                return
+            backup.auto_backup(DATA_DIR / "backups", *self._backup_paths())
+        except Exception as e:
+            logger.warning(f"自动备份没有成功: {e}")
+
+    def backup_info(self):
+        """现有的自动备份（新的在前）和放它们的文件夹"""
+        from webapp import backup
+        folder = DATA_DIR / "backups"
+        return {"folder": str(folder), "items": backup.list_auto(folder)[:backup.AUTO_KEEP], "everyDays": backup.AUTO_EVERY_DAYS,
+                "keep": backup.AUTO_KEEP}
+
+    def backup_now(self, target=None):
+        """马上备份一份。target 不给时让用户选存到哪里。返回 {ok, path, bytes, counts}；取消了返回 {ok: False, cancelled: True}。"""
+        from webapp import backup
+        if not target:
+            import webview
+            if not self._window:
+                return {"ok": False, "error": "没有窗口"}
+            picked = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=f"{backup.PREFIX}{time.strftime('%Y%m%d-%H%M%S')}.zip")
+            if not picked:
+                return {"ok": False, "cancelled": True}
+            target = picked if isinstance(picked, str) else picked[0]
+        try:
+            return {"ok": True, **backup.create(Path(target), *self._backup_paths())}
+        except Exception as e:
+            logger.error(f"备份失败: {e}")
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def backup_open_folder(self):
+        folder = DATA_DIR / "backups"
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(folder))       # noqa: S606 - 打开的是程序自己的备份文件夹
+        return True
+
+    # ---- 托盘：悬浮提示里的任务状态、右键菜单里的操作
+    def _tray_job(self):
+        # 下载进程还没启动过就不去碰它（只是把鼠标放到托盘图标上，不应该因此启动一个进程）
+        if self._dl is None or not self._dl.running:
+            return None
+        r = self.dl("GET", "/api/job")
+        return r.get("data") if r.get("ok") else None
+
+    def _tray_actions(self) -> dict:
+        def page(what):
+            return lambda: self._window.evaluate_js(f"window.__pvOpen && window.__pvOpen('{what}')")
+        return {"pause": lambda: self.dl("POST", "/api/job/pause"), "resume": lambda: self.dl("POST", "/api/job/resume"),
+                "stop": lambda: self.dl("POST", "/api/job/stop"), "downloader": page("downloader"), "settings": page("settings")}
+
+    def mcp_info(self):
+        """给设置页显示：AI 助手里该怎么配置这个软件"""
+        exe = sys.executable
+        if getattr(sys, "frozen", False):
+            command, args = exe, ["--mcp"]
+        else:
+            command, args = exe, ["-m", "webapp.mcp_server"]
+        return {"command": command, "args": args, "cwd": "" if getattr(sys, "frozen", False) else str(Path(__file__).resolve().parent.parent),
+                "level": str((self._store.load_settings() or {}).get("mcp") or "off"),
+                "tools": [{"name": n, "level": lv} for n, lv, _, _ in MCP_TOOLS]}
+
+    def export_diagnostics(self, target=None):
+        """把最近的日志和一份摘要打成压缩包（遇到问题时发给开发者）。不含登录凭证、密码、数据库、图片。
+
+        target 不给时让用户选保存的地方。返回 {ok, path, files, bytes}；取消了返回 {ok: False, cancelled: True}。
+        """
+        from webapp import diagnostics
+        if not target:
+            import webview
+            if not self._window:
+                return {"ok": False, "error": "没有窗口"}
+            name = f"PixivViewer-诊断-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+            picked = self._window.create_file_dialog(webview.SAVE_DIALOG, save_filename=name)
+            if not picked:
+                return {"ok": False, "cancelled": True}
+            target = picked if isinstance(picked, str) else picked[0]
+        try:
+            artists = self._library.artists()
+            works = self._library.all_works(scan=False)
+            facts = {
+                "library": {"roots": [{"path": r, "readable": os.path.isdir(r)} for r in self._library.roots()],
+                            "artists": len(artists), "works": len(works), "images": sum(len(w.pages) for w in works),
+                            "indexing": self._indexing, "restored": self._library.restored, "rescanned": self._library.rescanned,
+                            "share_error": self._share_error},
+                "cache_bytes": self._cache_size(),
+                "ui_settings": {k: v for k, v in (self._store.load_settings() or {}).items() if k != "afterCommand"},
+                "downloader_running": bool(self._dl and self._dl.running),
+            }
+            return {"ok": True, **diagnostics.build(Path(target), LOG_DIR, self._downloader_home(), facts)}
+        except Exception as e:
+            logger.error(f"导出诊断信息失败: {e}")
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
     def save_text(self, name, text):
         """让用户选个地方，把一段文字存成文件（导出清单用）。返回保存的路径；取消了返回空字符串。"""
         import webview

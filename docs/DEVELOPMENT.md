@@ -76,6 +76,57 @@ Release 的标签用 `v版本号`。更新的实现和替换失败时的回滚�
 
 README 里的截图由 `python scripts/make_screenshots.py` 生成（示例数据，两倍像素密度），界面改动后重新跑一遍。
 
+### 重要更新提醒（notices.json）
+
+仓库根目录的 `notices.json` 是给已经装出去的旧版本看的。软件启动时和每天一次读它（`webapp/notices.py`），
+把“针对当前版本”的通知显示出来。平时保持 `{"notices": []}`。出了必须让用户更新的事（比如 Pixiv 改了接口）时：
+先修好并发布新版本，再往里加一条并推送到 `main`：
+
+```json
+{"notices": [{"id": "2026-11-api", "below": "1.2.0", "level": "important",
+  "title": {"zh": "这个版本的下载功能已经不能用了", "en": "Downloading no longer works in this version"},
+  "text": {"zh": "Pixiv 调整了接口，请更新到最新版本。", "en": "Pixiv changed its API. Please update."}}]}
+```
+
+`below`：低于这个版本的才提醒；`level`：`important` 打开软件就弹出，`download` 只在下载面板里提示。
+`tests/test_notices.py` 会检查这个文件的格式，写错了测试会失败。
+
+### Pixiv 接口体检
+
+`pixiv_dl/apicheck.py` 里有一张清单（`CONTRACT`）：软件用到的每个 Pixiv 接口、以及代码依赖的字段和类型。
+代码里新用了某个字段，就往清单里补一条。体检对每个接口各发一次只读请求并对照检查：
+
+```
+python scripts/check_api.py            # 发版前跑一次；有接口变了会以非零状态退出
+```
+
+软件里打开开发者模式（“设置 → 关于”）后，“设置 → 开发者”里也能跑。接口变了：修代码 → 发新版本 →
+往 `notices.json` 里加一条（见上一节），旧版本的用户下次启动就会看到提醒。
+
+### 给 AI 助手用的接口（MCP）
+
+`webapp/mcp_server.py` 是转发程序（`PixivViewer.exe --mcp`，标准输入输出上的 JSON-RPC），它把工具调用转给正在运行的窗口；
+真正的实现和工具清单在 `webapp/mcp_tools.py`（`TOOLS`）。加工具：在清单里加一行（名字、需要的级别、给模型看的英文说明、参数），
+再写一个 `_t_<名字>` 方法。级别 `read / edit / full` 由用户在设置里选，默认 `off`。
+返回给模型的作品标题、说明、标签是不可信的文字，只当数据返回；会动 Pixiv 或文件的操作一律走“先 plan 再 start”。
+
+### 界面语言
+
+界面文字在代码里用中文写，显示时由 `webui/js/i18n.js` 按对照表换成英文（`i18n_en.js`）或日语（`i18n_ja.js`）。
+两张表的条目要一一对应：往英文表里加了一条，日语表也要加（测试会检查）；日语表里没有的会退回英文。
+加了新的界面文字，就往对照表里补一条（数字写成 `{0}`，带名字的句子写成正则）；漏了只是那一处仍显示中文。
+找漏掉的：`set PV_I18N_COLLECT=seen.jsonl` 后跑 `pytest tests/ui`，再 `node scripts/check_i18n.mjs seen.jsonl`。
+托盘菜单、系统通知这些原生显示的文字在 Python 里用 `utils/lang.py` 的 `pick("中文", "English")`。日志不翻译。
+
+### 发版前的冒烟检查
+
+```
+python scripts/build_viewer.py && python scripts/smoke_packaged.py
+```
+
+在打包好的程序、真实的窗口里把主要功能走一遍（语言、设置各页、备份、开发者模式、MCP、重启后的扫描结果等），
+用临时数据，不碰真实数据也不访问 Pixiv。单元测试和浏览器预览发现不了“打包之后才出”的问题，所以发版前跑一次。
+
 ### 约定
 
 - **改数据库表结构**：不要改已有的建表语句，在对应的步骤列表末尾追加一步（`webapp/store.py` 的 `SCHEMA`、

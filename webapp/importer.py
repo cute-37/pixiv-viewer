@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import sqlite3
+import tempfile
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
@@ -115,6 +116,15 @@ def inspect(path_str: str) -> List[dict]:
     """识别一个路径。文件夹可能是头像文件夹，也可能是整个旧的数据文件夹（那就把里面认得的都找出来）。"""
     path = Path(path_str)
     try:
+        if path.is_file() and path.suffix.lower() == ".zip":
+            # 这个软件自己做的备份：解到临时文件夹里，当成一个数据文件夹来认
+            from webapp import backup
+            info = backup.read_manifest(path)
+            if not info:
+                return [_item(path, problem="是压缩包，但不是这个软件做的备份")]
+            into = Path(tempfile.mkdtemp(prefix="pv_restore_"))
+            backup.extract(path, into)
+            return inspect(str(into)) or [_item(path, problem="这个备份里没有可以导入的数据")]
         if path.is_file():
             return [_inspect_file(path)]
         if not path.is_dir():
@@ -268,12 +278,24 @@ def merge_viewer_db(src: str, store) -> dict:
             favs = con.execute("SELECT key, added FROM favorites").fetchall()
             views = con.execute("SELECT key, ts FROM views").fetchall()
             pins = con.execute("SELECT artist, added FROM pins").fetchall()
+            # 画师文件夹（早期的数据库里没有这两张表）
+            names = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            folders = con.execute("SELECT id, name, created FROM folders").fetchall() if "folders" in names else []
+            members = con.execute("SELECT folder_id, artist, added FROM folder_artists").fetchall() if "folder_artists" in names else []
         dst = store._conn()
         with dst:
             dst.executemany("INSERT OR IGNORE INTO favorites (key, added) VALUES (?, ?)", favs)
             dst.executemany("INSERT INTO views (key, ts) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET ts = MAX(ts, excluded.ts)", views)
             dst.executemany("INSERT OR IGNORE INTO pins (artist, added) VALUES (?, ?)", pins)
-        res.update(ok=True, message=f"合并了 {len(favs)} 个收藏、{len(views)} 条最近查看、{len(pins)} 个置顶")
+            # 文件夹按名字对应：同名的并到一起，没有的新建
+            mine = {name: fid for fid, name in dst.execute("SELECT id, name FROM folders")}
+            for fid, name, created in folders:
+                if name not in mine:
+                    mine[name] = dst.execute("INSERT INTO folders (name, created) VALUES (?, ?)", (name, created)).lastrowid
+                dst.executemany("INSERT OR IGNORE INTO folder_artists (folder_id, artist, added) VALUES (?, ?, ?)",
+                                [(mine[name], artist, added) for f, artist, added in members if f == fid])
+        res.update(ok=True, message=f"合并了 {len(favs)} 个收藏、{len(views)} 条最近查看、{len(pins)} 个置顶"
+                                    + (f"、{len(folders)} 个画师文件夹" if folders else ""))
     except Exception as e:
         logger.error(f"合并 {src} 失败: {e}")
         res["message"] = f"没有成功：{e}"

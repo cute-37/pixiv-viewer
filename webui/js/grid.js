@@ -47,7 +47,8 @@ ctx.loadWorks = loadWorks;
 function tileHTML(w) {
   const p = w.pages[0];
   const sel = view.sel.has(w.key), cur = view.cur === w.key;
-  const badges = (w.rating !== "safe" ? `<span class="badge r18">${w.rating === "r18g" ? "R18G" : "R18"}</span>` : "") + (w.ai ? `<span class="badge">AI</span>` : "");
+  const badges = (w.rating !== "safe" ? `<span class="badge r18">${w.rating === "r18g" ? "R18G" : "R18"}</span>` : "") + (w.ai ? `<span class="badge">AI</span>` : "")
+    + (w.anim ? `<span class="badge anim" title="动图：封面是静止的，鼠标停在上面或打开后会播放">${icon("play")}动图</span>` : "");
   const stars = w.stars ? `<span class="stars-mini">${icon("star").repeat(w.stars)}</span>` : "";
   const open = w.pages.length > 1 && view.expanded.has(w.key);
   return `<div class="tile ${sel ? "sel" : ""} ${cur ? "cur" : ""} ${open ? "expanded" : ""}" data-k="${esc(w.key)}" style="--ar:${w.ar}${open ? `;--grp:${view.expanded.get(w.key)}` : ""}">
@@ -227,9 +228,22 @@ function emptyHTML() {
       <p>第一次打开或图库在网络共享上时需要一点时间。扫描到的作品会陆续出现在这里，也可以先从左侧打开某位画师。</p></div></div>`;
   }
   if (!ctx.lib.roots.length) {
-    return `<div class="empty"><div class="box"><div class="ic">${icon("folder")}</div><h3>从这里开始</h3>
-      <p>已经有图片：添加存放它们的文件夹，里面每个子文件夹算一位画师。<br>还没有：用“下载与更新”添加 Pixiv 账号，下载关注画师的作品。</p>
-      <div class="acts"><button class="btn primary" data-act="add">${icon("plus")}添加文件夹</button>${ctx.openDownloader ? `<button class="btn" data-act="open-dl">${icon("dl")}下载与更新</button>` : ""}</div></div></div>`;
+    // 第一次打开：两条路各自说清楚要做什么，每一步都能直接点过去
+    const dl = !!ctx.openDownloader;
+    return `<div class="empty"><div class="welcome">
+      <h3>欢迎使用 Pixiv Viewer</h3><p class="lead">选一种方式开始。两种可以都用：之后下载的图会和已有的图放在同一个图库里。</p>
+      <div class="ways">
+        <section><div class="ic">${icon("folder")}</div><h4>我已经有图片</h4>
+          <p>选存放它们的文件夹，里面每个子文件夹算一位画师。图片留在原处，不会被移动或修改。</p>
+          <div class="acts"><button class="btn primary" data-act="add">${icon("plus")}添加文件夹</button></div>
+          ${dl ? `<button class="linkbtn" data-act="open-settings" data-page="dl-link">以前用别的工具下载过？把数据库和头像也导进来</button>` : ""}</section>
+        ${dl ? `<section><div class="ic">${icon("dl")}</div><h4>从 Pixiv 下载</h4>
+          <ol class="steps">
+            <li><button class="linkbtn" data-act="open-settings" data-page="dl-accounts">登录 Pixiv 账号</button><small>在弹出的官方登录页里登录，软件看不到你的密码。</small></li>
+            <li><button class="linkbtn" data-act="open-settings" data-page="dl-storage">选保存位置</button><small>不选就存在程序文件夹的 data 里；也可以存到网络共享。</small></li>
+            <li><button class="linkbtn" data-act="open-dl">检查关注的画师并下载</button><small>开始前会先告诉你要做什么，确认了才会访问 Pixiv。</small></li>
+          </ol></section>` : ""}
+      </div></div></div>`;
   }
   // 图库所在的位置（多半是网络共享）读不到：说清楚是没连上，而不是“没有图片”
   const off = ctx.lib.roots.filter((r) => r.offline);
@@ -251,6 +265,7 @@ $("#grid-root").addEventListener("click", (e) => {
   const act = e.target.closest("[data-act]");
   if (act && act.dataset.act === "add") return addFolder();
   if (act && act.dataset.act === "open-dl") return ctx.openDownloader();
+  if (act && act.dataset.act === "open-settings") return ctx.openSettings(act.dataset.page);
   if (act && act.dataset.act === "reconnect") return reconnect(act);
   if (act && act.dataset.act === "clear-filters") { view.q = ""; $("#q").value = ""; view.tags.clear(); view.filters = {}; ctx.setSetting({ rating: "all" }, { reload: true }); return; }
   const tile = e.target.closest(".tile"); if (!tile) return;

@@ -5,6 +5,8 @@
 """
 import functools
 import http.server
+import json
+import os
 import threading
 from pathlib import Path
 
@@ -39,8 +41,33 @@ def browser():
                 continue
         if instance is None:
             pytest.skip("没有可用的浏览器（Edge 或 playwright 的 Chromium）")
+        make = instance.new_context
+
+        def new_context(*args, **kwargs):          # 每个页面都带上“收集界面文字”的开关（平时不起作用）
+            context = make(*args, **kwargs)
+            # 测试不依赖外网：在线字体直接放弃（否则没网或网慢时页面一直等它，测试会超时）
+            context.route("**/fonts.googleapis.com/**", lambda route: route.abort())
+            context.route("**/fonts.gstatic.com/**", lambda route: route.abort())
+            _collect_texts(context)
+            return context
+
+        instance.new_context = new_context
         yield instance
         instance.close()
+
+
+def _collect_texts(context):
+    """设了环境变量 PV_I18N_COLLECT=文件 时：把测试过程中界面上出现过的中文都记到这个文件里（做翻译对照表用）"""
+    target = os.environ.get("PV_I18N_COLLECT")
+    if not target:
+        return
+    context.add_init_script("window.__i18nCollect = true;")
+
+    def report(source, text):
+        with open(target, "a", encoding="utf-8") as f:
+            f.write(json.dumps(text, ensure_ascii=False) + "\n")
+
+    context.expose_binding("__i18nReport", report)
 
 
 @pytest.fixture
